@@ -1,184 +1,145 @@
 <template>
-  <a-layout style="min-height: 100vh">
-    <a-layout-sider v-model:collapsed="collapsed" collapsible>
-      <div class="logo"
-           style="font-style: italic;text-align: center;font-size: 20px;color:#fff;margin: 10px 0;line-height: 50px;font-family: 'Times New Roman'">
-        <span><a-switch v-model:checked="checked"/> DevOps</span>
+  <a-layout class="layout">
+    <a-layout-sider v-model:collapsed="collapsed" :trigger="null" collapsible theme="dark" breakpoint="lg">
+      <div class="logo">
+        <cloud-server-outlined/>
+        <span v-if="!collapsed">Uric 运维平台</span>
       </div>
-      <div class="logo"/>
-      <a-menu v-for="menu in menu_list" v-model:selectedKeys="selectedKeys" theme="dark" mode="inline">
-        <a-menu-item v-if="menu.children.length===0" :key="menu.id">
-
-          <router-link :to="menu.menu_url">
-            <desktop-outlined/>
-            <span> {{ menu.title }}</span>
-          </router-link>
+      <a-menu v-model:selectedKeys="selectedKeys" theme="dark" mode="inline" @click="onMenuClick">
+        <a-menu-item v-for="item in menus" :key="item.name">
+          <component :is="item.icon"/>
+          <span>{{ item.title }}</span>
         </a-menu-item>
-
-        <a-sub-menu v-else :key="menu.id">
-          <template #title>
-            <span>
-              <user-outlined/>
-              <span>{{ menu.title }}</span>
-            </span>
-          </template>
-          <a-menu-item v-for="child_menu in menu.children" :key="child_menu.id">
-            <router-link :to="child_menu.menu_url">{{ child_menu.title }}</router-link>
-          </a-menu-item>
-        </a-sub-menu>
       </a-menu>
     </a-layout-sider>
+
     <a-layout>
-      <a-layout-header style="background: #fff; padding: 20px">
-
-
-        <a-row type="flex" justify="start">
-
-          <a-col :span="6">
-            <a-breadcrumb>
-              <a-breadcrumb-item href="">
-                <home-outlined/>
-              </a-breadcrumb-item>
-              <a-breadcrumb-item href="">
-                <user-outlined/>
-                <span>Application List</span>
-              </a-breadcrumb-item>
-              <a-breadcrumb-item>Application</a-breadcrumb-item>
-            </a-breadcrumb>
-          </a-col>
-
-          <a-col :span="1" :offset="17">
-            <a-breadcrumb>
-              <a-button @click="logout" type="primary" class="logout">
-                注销
-              </a-button>
-            </a-breadcrumb>
-          </a-col>
-
-        </a-row>
-
+      <a-layout-header class="header">
+        <menu-unfold-outlined v-if="collapsed" class="trigger" @click="collapsed = false"/>
+        <menu-fold-outlined v-else class="trigger" @click="collapsed = true"/>
+        <div class="header-title">{{ currentTitle }}</div>
+        <div class="header-right">
+          <a-tag color="blue">{{ username }}</a-tag>
+          <a-button type="text" danger @click="logout">注销</a-button>
+        </div>
       </a-layout-header>
 
-      <a-layout-content style="margin: 0 16px">
-
-        <router-view></router-view>
-
+      <a-layout-content class="content">
+        <router-view/>
       </a-layout-content>
-      <a-layout-footer style="text-align: center">
-        Ant Design ©2018 Created by Ant UED
-      </a-layout-footer>
+
+      <a-layout-footer class="footer">Uric 运维平台 · 本地开发环境</a-layout-footer>
     </a-layout>
   </a-layout>
 </template>
-<script>
 
-
+<script setup>
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useStore } from 'vuex'
+import { Modal } from 'ant-design-vue'
 import {
-  DesktopOutlined,
-  FileOutlined,
-  PieChartOutlined,
-  TeamOutlined,
-  UserOutlined,
-  HomeOutlined
-} from '@ant-design/icons-vue';
-import {defineComponent, ref} from 'vue';
+  CloudServerOutlined,
+  DashboardOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  RobotOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons-vue'
 
-export default defineComponent({
-  setup() {
-    const checked = ref(true);
-    return {
-      checked,
-    };
-  },
-  components: {
-    PieChartOutlined,
-    DesktopOutlined,
-    UserOutlined,
-    TeamOutlined,
-    FileOutlined,
-    HomeOutlined,
-  },
+const store = useStore()
+const router = useRouter()
+const route = useRoute()
 
-  data() {
-    return {
-      collapsed: ref(false),
-      selectedKeys: ref(['1']),
-      menu_list: [
-        {
-          id: 1, icon: 'mail', title: '展示中心', tube: '', 'menu_url': '/uric/show_center', children: []
-        },
-        {
-          id: 2, icon: 'mail', title: '资产管理', 'menu_url': '/uric/host', children: []
-        },
-        {
-          "id": 3, icon: 'bold', title: '批量任务', tube: '', menu_url: '/uric/workbench', children: [
-            {id: 10, icon: 'mail', title: '执行任务', 'menu_url': '/uric/multi_exec'},
-            {id: 11, icon: 'mail', title: '命令管理', 'menu_url': '/uric/template_manage'},
-          ]
-        },
-        {
-          id: 4, icon: 'highlight', title: '代码发布', tube: '', menu_url: '/uric/workbench', children: [
-            {id: 12, title: '应用管理', menu_url: '/uric/release'},
-            {id: 13, title: '发布申请', menu_url: '/uric/release'}
-          ]
-        },
-        {id: 5, icon: 'mail', title: '定时计划', tube: '', menu_url: '/uric/workbench', children: []},
-        {
-          id: 6, icon: 'mail', title: '配置管理', tube: '', menu_url: '/uric/workbench', children: [
-            {id: 14, title: '环境管理', 'menu_url': '/uric/environment'},
-            {id: 15, title: '服务配置', 'menu_url': '/uric/workbench'},
-            {id: 16, title: '应用配置', 'menu_url': '/uric/workbench'}
-          ]
-        },
-        {id: 7, icon: 'mail', title: '监控预警', tube: '', 'menu_url': '/uric/workbench', children: []},
-        {
-          id: 8, icon: 'mail', title: '报警', tube: '', 'menu_url': '/uric/workbench', children: [
-            {id: 17, title: '报警历史', 'menu_url': '/uric/workbench'},
-            {id: 18, title: '报警联系人', 'menu_url': '/uric/workbench'},
-            {id: 19, title: '报警联系组', 'menu_url': '/uric/workbench'}
-          ]
-        },
-        {
-          id: 9, icon: 'mail', title: '用户管理', tube: '', menu_url: '/uric/workbench', children: [
-            {id: 20, title: '账户管理', tube: '', menu_url: '/uric/workbench'},
-            {id: 21, title: '角色管理', tube: '', menu_url: '/uric/workbench'},
-            {id: 22, title: '系统设置', tube: '', menu_url: '/uric/workbench'}
-          ]
-        }
-      ]
-    };
-  },
-  methods: {
-    logout() {
-      let self = this;
-      this.$confirm({
-        title: 'Uric系统提示',
-        content: '您确认要注销登陆吗？',
-        onOk() {
-          self.$store.commit('setToken', '')
-          self.$router.push('/login')
-        }
-      })
-    },
-  }
+const collapsed = ref(false)
 
-});
-</script>
-<style>
-#components-layout-demo-side .logo {
-  height: 32px;
-  margin: 16px;
+const menus = [
+  { name: 'ShowCenter', title: '展示中心', icon: DashboardOutlined },
+  { name: 'Host', title: '资产管理', icon: CloudServerOutlined },
+  { name: 'MultiExec', title: '批量执行', icon: ThunderboltOutlined },
+  { name: 'AiChat', title: 'AI 助手', icon: RobotOutlined },
+]
+
+const selectedKeys = computed(() => {
+  const matched = menus.find((item) => item.name === route.name)
+  return matched ? [matched.name] : []
+})
+
+const currentTitle = computed(() => route.meta?.title || '')
+const username = computed(() => store.getters.userInfo?.username || '未登录')
+
+function onMenuClick({ key }) {
+  router.push({ name: key })
 }
 
-.site-layout .site-layout-background {
+function logout() {
+  Modal.confirm({
+    title: 'Uric 系统提示',
+    content: '您确认要注销登录吗？',
+    okText: '注销',
+    cancelText: '取消',
+    onOk() {
+      store.commit('setToken', '')
+      router.push({ name: 'Login' })
+    },
+  })
+}
+</script>
+
+<style scoped>
+.layout {
+  min-height: 100vh;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 20px;
+  color: #fff;
+  font-size: 16px;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
   background: #fff;
 }
 
-[data-theme='dark'] .site-layout .site-layout-background {
-  background: #141414;
+.trigger {
+  font-size: 18px;
+  cursor: pointer;
 }
 
-.logout {
-  line-height: 1.5715;
+.header-title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.content {
+  margin: 16px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 6px;
+  min-height: 0;
+}
+
+.footer {
+  padding: 12px 20px;
+  text-align: center;
+  color: rgba(0, 0, 0, 0.45);
 }
 </style>

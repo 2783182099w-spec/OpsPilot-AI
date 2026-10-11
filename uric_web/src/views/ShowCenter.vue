@@ -1,284 +1,178 @@
 <template>
-    <h3>展示中心</h3>
-    <a-row>
-        <a-col :span="8">
-            <p>
-                <a-input-search
-                        v-model:value="city"
-                        placeholder="city"
-                        enter-button="Search"
-                        size="large"
-                        @search="get_weather"
-                />
-            </p>
-
-        </a-col>
+  <div>
+    <a-row :gutter="16">
+      <a-col :span="8">
+        <a-card>
+          <a-statistic title="主机总数" :value="hosts.length" :loading="loading">
+            <template #prefix>
+              <cloud-server-outlined/>
+            </template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+      <a-col :span="8">
+        <a-card>
+          <a-statistic title="主机类别" :value="categories.length" :loading="loading">
+            <template #prefix>
+              <appstore-outlined/>
+            </template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+      <a-col :span="8">
+        <a-card>
+          <a-statistic title="指令模板" :value="templates.length" :loading="loading">
+            <template #prefix>
+              <code-outlined/>
+            </template>
+          </a-statistic>
+        </a-card>
+      </a-col>
     </a-row>
 
-    <a-row>
-        <a-col :span="16">
-            <a-table :columns="columns" :data-source="data">
-                <template #bodyCell="{ column, text }">
-                    <template v-if="column.dataIndex === 'name'">
-                        <a>{{ text }}</a>
-                    </template>
-                </template>
-            </a-table>
-        </a-col>
+    <a-row :gutter="16" class="charts">
+      <a-col :span="12">
+        <a-card title="各类别主机数量" size="small">
+          <div ref="hostChartRef" class="chart"></div>
+        </a-card>
+      </a-col>
+      <a-col :span="12">
+        <a-card title="指令模板分布" size="small">
+          <div ref="templateChartRef" class="chart"></div>
+        </a-card>
+      </a-col>
     </a-row>
-
-
-    <a-row>
-        <a-col :span="12">
-            <div class="chart" ref="chart01"></div>
-        </a-col>
-
-        <a-col :span="12">
-            <div class="chart" ref="chart02"></div>
-
-        </a-col>
-    </a-row>
-
-
+  </div>
 </template>
 
-<script>
-    import axios from "axios"
-    import * as echarts from 'echarts';
-    import {ref} from 'vue';
+<script setup>
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import * as echarts from 'echarts'
+import { AppstoreOutlined, CloudServerOutlined, CodeOutlined } from '@ant-design/icons-vue'
 
+import api from '@/api'
 
-    export default {
-        name: "ShowCenter",
-        setup() {
-            const value = ref();
+const loading = ref(true)
+const hosts = ref([])
+const categories = ref([])
+const templates = ref([])
 
-            return {
-                value,
-            };
-        },
-        data() {
-            return {
-                weather_list: [],
-                city: "北京",
-                columns: [
-                    {
-                        title: 'Date',
-                        dataIndex: 'date',
-                        key: 'date',
-                    },
-                    {
-                        title: 'Type',
-                        dataIndex: 'type',
-                        key: 'type',
-                        width: 80,
-                    },
-                    {
-                        title: 'High',
-                        dataIndex: 'high',
-                        key: 'high 1',
-                        ellipsis: true,
-                    },
-                    {
-                        title: 'Low',
-                        dataIndex: 'low',
-                        key: 'low 2',
-                        ellipsis: true,
-                    },
-                    {
-                        title: 'FengXiang',
-                        dataIndex: 'fengxiang',
-                        key: 'fengxiang 3',
-                        ellipsis: true,
-                    },
-                ],
-                data: [],
-            }
-        },
-        methods: {
-            get_weather() {
-                console.log("showCenter token:::",this.$store.getters.token)
+const hostChartRef = ref(null)
+const templateChartRef = ref(null)
+let hostChart = null
+let templateChart = null
 
+const EMPTY_OPTION = {
+  title: {
+    text: '暂无数据',
+    left: 'center',
+    top: 'middle',
+    textStyle: { color: '#bfbfbf', fontSize: 14, fontWeight: 'normal' },
+  },
+}
 
-                console.log(this.$settings.host);
-                axios.get("http://wthrcdn.etouch.cn/weather_mini",
-                // axios.get("https://v0.yiketianqi.com/api?unescape=1&version=v91&appid=43656176&appsecret=I42og6Lm",
+function countBy(items, pick) {
+  const result = {}
+  items.forEach((item) => {
+    const key = pick(item) || '未分类'
+    result[key] = (result[key] || 0) + 1
+  })
+  return result
+}
 
-                    {
-                        params: {
-                            city: this.city
-                        }
-                    },
-                ).then((response) => {
-                    console.log("response", response.data.data.forecast);
-                    // this.weather_list = response.data.data.forecast
-                    this.data = response.data.data.forecast
-                })
+function renderHostChart() {
+  if (!hostChart) return
+  const data = countBy(hosts.value, (host) => host.category_name)
+  const names = Object.keys(data)
+  if (!names.length) {
+    hostChart.setOption(EMPTY_OPTION, true)
+    return
+  }
+  hostChart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 20, top: 20, bottom: 40 },
+    xAxis: { type: 'category', data: names },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [
+      {
+        name: '主机数量',
+        type: 'bar',
+        barMaxWidth: 40,
+        itemStyle: { color: '#2a5298', borderRadius: [4, 4, 0, 0] },
+        data: names.map((name) => data[name]),
+      },
+    ],
+  }, true)
+}
 
-            },
-            chart01() {
-                console.log(":::", this.$refs.chart01);
-                var myChart = echarts.init(this.$refs.chart01);
-                var option;
-                option = {
-                    tooltip: {
-                        trigger: 'axis',
-                        axisPointer: {
-                            // Use axis to trigger tooltip
-                            type: 'shadow' // 'shadow' as default; can also be 'line' or 'shadow'
-                        }
-                    },
-                    legend: {},
-                    grid: {
-                        left: '3%',
-                        right: '4%',
-                        bottom: '3%',
-                        containLabel: true
-                    },
-                    xAxis: {
-                        type: 'value'
-                    },
-                    yAxis: {
-                        type: 'category',
-                        data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-                    },
-                    series: [
-                        {
-                            name: 'Direct',
-                            type: 'bar',
-                            stack: 'total',
-                            label: {
-                                show: true
-                            },
-                            emphasis: {
-                                focus: 'series'
-                            },
-                            data: [320, 302, 301, 334, 390, 330, 320]
-                        },
-                        {
-                            name: 'Mail Ad',
-                            type: 'bar',
-                            stack: 'total',
-                            label: {
-                                show: true
-                            },
-                            emphasis: {
-                                focus: 'series'
-                            },
-                            data: [120, 132, 101, 134, 90, 230, 210]
-                        },
-                        {
-                            name: 'Affiliate Ad',
-                            type: 'bar',
-                            stack: 'total',
-                            label: {
-                                show: true
-                            },
-                            emphasis: {
-                                focus: 'series'
-                            },
-                            data: [220, 182, 191, 234, 290, 330, 310]
-                        },
-                        {
-                            name: 'Video Ad',
-                            type: 'bar',
-                            stack: 'total',
-                            label: {
-                                show: true
-                            },
-                            emphasis: {
-                                focus: 'series'
-                            },
-                            data: [150, 212, 201, 154, 190, 330, 410]
-                        },
-                        {
-                            name: 'Search Engine',
-                            type: 'bar',
-                            stack: 'total',
-                            label: {
-                                show: true
-                            },
-                            emphasis: {
-                                focus: 'series'
-                            },
-                            data: [820, 832, 901, 934, 1290, 1330, 1320]
-                        }
-                    ]
-                };
+function renderTemplateChart() {
+  if (!templateChart) return
+  const data = countBy(templates.value, (item) => item.category_name)
+  const names = Object.keys(data)
+  if (!names.length) {
+    templateChart.setOption(EMPTY_OPTION, true)
+    return
+  }
+  templateChart.setOption({
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0 },
+    series: [
+      {
+        name: '模板数量',
+        type: 'pie',
+        radius: ['40%', '65%'],
+        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        label: { formatter: '{b}: {c}' },
+        data: names.map((name) => ({ name, value: data[name] })),
+      },
+    ],
+  }, true)
+}
 
-                option && myChart.setOption(option);
+function resizeCharts() {
+  hostChart?.resize()
+  templateChart?.resize()
+}
 
+async function load() {
+  loading.value = true
+  try {
+    const [hostRes, categoryRes, templateRes] = await Promise.all([
+      api.get('/host/'),
+      api.get('/host/category'),
+      api.get('/mtask/templates'),
+    ])
+    hosts.value = hostRes.data
+    categories.value = categoryRes.data
+    templates.value = templateRes.data
+  } finally {
+    loading.value = false
+  }
+  await nextTick()
+  renderHostChart()
+  renderTemplateChart()
+}
 
-            },
-            chart02() {
+onMounted(() => {
+  hostChart = echarts.init(hostChartRef.value)
+  templateChart = echarts.init(templateChartRef.value)
+  window.addEventListener('resize', resizeCharts)
+  load()
+})
 
-                var myChart = echarts.init(this.$refs.chart02);
-                var option;
-                option = {
-                    tooltip: {
-                        trigger: 'item'
-                    },
-                    legend: {
-                        top: '5%',
-                        left: 'center'
-                    },
-                    series: [
-                        {
-                            name: 'Access From',
-                            type: 'pie',
-                            radius: ['40%', '70%'],
-                            avoidLabelOverlap: false,
-                            itemStyle: {
-                                borderRadius: 10,
-                                borderColor: '#fff',
-                                borderWidth: 2
-                            },
-                            label: {
-                                show: false,
-                                position: 'center'
-                            },
-                            emphasis: {
-                                label: {
-                                    show: true,
-                                    fontSize: '40',
-                                    fontWeight: 'bold'
-                                }
-                            },
-                            labelLine: {
-                                show: false
-                            },
-                            data: [
-                                {value: 1048, name: 'Search Engine'},
-                                {value: 735, name: 'Direct'},
-                                {value: 580, name: 'Email'},
-                                {value: 484, name: 'Union Ads'},
-                                {value: 300, name: 'Video Ads'}
-                            ]
-                        }
-                    ]
-                };
-
-                option && myChart.setOption(option);
-
-
-            }
-        },
-
-
-        mounted() {
-
-
-
-            this.get_weather();
-            this.chart01();
-            this.chart02();
-
-        }
-    }
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', resizeCharts)
+  hostChart?.dispose()
+  templateChart?.dispose()
+})
 </script>
 
 <style scoped>
-    .chart {
-        height: 500px;
-    }
+.charts {
+  margin-top: 16px;
+}
+
+.chart {
+  height: 320px;
+}
 </style>

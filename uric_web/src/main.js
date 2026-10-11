@@ -1,21 +1,19 @@
-import {createApp} from 'vue'
+import { createApp } from 'vue'
+import Antd from 'ant-design-vue'
+import 'ant-design-vue/dist/reset.css'
+
 import App from './App.vue'
 import router from './router'
 import store from './store'
-import settings from "@/settings";
-import Antd from 'ant-design-vue';
-import 'ant-design-vue/dist/antd.css';
-import 'xterm/css/xterm.css'
-import 'xterm/lib/xterm'
+import settings from '@/settings'
 
-const app = createApp(App);
+const app = createApp(App)
 
-app.use(store).use(router).use(Antd).mount('#app');
+app.use(store)
+app.use(router)
+app.use(Antd)
 
-app.config.globalProperties.$settings = settings;
+app.config.globalProperties.$settings = settings
 
-
-// 配置echarts插件
-let echarts = require('echarts');
-app.config.globalProperties.$echarts = echarts;
+app.mount('#app')
 

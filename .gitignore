@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Django
+logs/
+*.log
+db_local.sqlite3
+staticfiles/
+
+# 本地私有配置（密钥、口令）
+local_secret.py
+.env
+*.env
+
+# 虚拟环境
+venv/
+venv_*/
+
+# Node / 前端
+node_modules/
+dist/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

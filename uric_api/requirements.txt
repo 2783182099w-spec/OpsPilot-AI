@@ -5,7 +5,6 @@ cryptography==37.0.2
 Django==3.2
 django-cors-headers==3.13.0
 djangorestframework==3.13.1
-djangorestframework-jwt==1.11.0
 et-xmlfile==1.1.0
 openpyxl==3.0.10
 paramiko==2.11.0

@@ -24,4 +24,5 @@ urlpatterns = [
     path('host/', include("host.urls")),
     path('users/', include("users.urls")),
     path('mtask/', include('mtask.urls')),
+    path('ai/', include('ai.urls')),
 ]

@@ -1,161 +1,207 @@
 <template>
-  <div className="console">
-    <div id="terminal"></div>
+  <div class="console-page">
+    <div class="console-bar">
+      <div class="console-info">
+        <cloud-server-outlined/>
+        <template v-if="host">
+          <strong>{{ host.name }}</strong>
+          <a-tag>{{ host.username }}@{{ host.ip_addr }}:{{ host.port }}</a-tag>
+        </template>
+        <a-spin v-else size="small"/>
+      </div>
+      <div class="console-actions">
+        <a-tag :color="statusColor">{{ statusText }}</a-tag>
+        <a-button size="small" :disabled="connecting" @click="reconnect">重连</a-button>
+        <a-button size="small" @click="goBack">返回资产</a-button>
+      </div>
+    </div>
+    <div ref="terminalRef" class="terminal"></div>
   </div>
 </template>
 
-<!--<script>-->
-<!--import {Terminal} from 'xterm'-->
-<!--import settings from "../settings"-->
+<script setup>
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useStore } from 'vuex'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { AttachAddon } from '@xterm/addon-attach'
+import { CloudServerOutlined } from '@ant-design/icons-vue'
+import '@xterm/xterm/css/xterm.css'
 
-<!--export default {-->
-<!--  name: "Console",-->
-<!--  mounted() {-->
-<!--    this.show_terminal()-->
-<!--  },-->
-<!--  methods: {-->
-<!--    show_terminal() {-->
-<!--      // 初始化terminal窗口-->
-<!--      let term = new Terminal({-->
-<!--        rendererType: "canvas", //渲染类型-->
-<!--        // rows: 40, //行数-->
-<!--        convertEol: true, // 启用时，光标将设置为下一行的开头-->
-<!--        scrollback: 100,   // 终端中的回滚量-->
-<!--        disableStdin: false, //是否应禁用输入。-->
-<!--        cursorStyle: 'underline', //光标样式-->
-<!--        cursorBlink: true, //光标闪烁-->
-<!--        theme: {-->
-<!--          foreground: '#ffffff', //字体-->
-<!--          background: '#060101', //背景色-->
-<!--          cursor: 'help',//设置光标-->
-<!--        }-->
-<!--      });-->
+import api from '@/api'
+import settings from '@/settings'
 
-<!--      // 建立websocket-->
-<!--      term.open(document.getElementById('terminal'));-->
+const route = useRoute()
+const router = useRouter()
+const store = useStore()
 
-<!--      let ws = new WebSocket(`ws://api.uric.cn:8000/ws/ssh/${this.$route.params.host_id}/`);-->
-<!--      let cmd = '';  // 拼接用户输入的命令-->
+const hostId = route.params.host_id
+const host = ref(null)
+const status = ref('connecting')
+const terminalRef = ref(null)
 
-<!--      // 监听接收来自服务端响应的数据-->
-<!--      ws.onmessage = function (event) {-->
-<!--        if (!cmd) {-->
-<!--          //所要执行的操作-->
-<!--          term.write(event.data);-->
-<!--        } else {-->
-<!--          console.log(JSON.stringify(event.data))-->
-<!--          cmd = ''-->
-<!--          let res = event.data.replace(event.data.split('\r\n', 1)[0] + "\r\n", '');-->
-<!--          term.write('\r\n' + res)-->
-<!--        }-->
-<!--      }-->
+let term = null
+let fitAddon = null
+let socket = null
+let attachAddon = null
 
-<!--      term.prompt = () => {-->
-<!--        term.write('\r\n');-->
-<!--        // term.write('\r\n$ ')-->
-<!--      }-->
-<!--      // ws.onopen = function (event){-->
-<!--      //   console.log('web链接成功')-->
-<!--      //   ws.send(-->
-<!--      //     JSON.stringify(-->
-<!--      //       cmd-->
-<!--      //     )-->
-<!--      //   )-->
-<!--      // }-->
-<!--      term.onKey(e => {-->
-<!--        console.log(e.key)-->
-<!--        const ev = e.domEvent-->
-<!--        const printable = !ev.altKey && !ev.altGraphKey && !ev.ctrlKey && !ev.metaKey-->
+const statusText = computed(() => ({
+  connecting: '连接中',
+  connected: '已连接',
+  closed: '已断开',
+  error: '连接失败',
+}[status.value] || status.value))
 
-<!--        // term.onData(key => {  // 粘贴的情况-->
-<!--        //   if(key.length > 1) term.write(key)-->
-<!--        // })-->
+const statusColor = computed(() => ({
+  connecting: 'processing',
+  connected: 'green',
+  closed: 'default',
+  error: 'red',
+}[status.value] || 'default'))
 
-<!--        if (ev.key === "Enter") {-->
-<!--          // 按下回车键进行指令的发送-->
-<!--          ws.send(cmd);-->
+const connecting = computed(() => status.value === 'connecting')
 
+function buildWsUrl() {
+  // 后端地址来自 settings.host，http -> ws，并带上 JWT 供后端鉴权
+  const base = settings.host.replace(/^http/, 'ws')
+  const token = encodeURIComponent(store.getters.token || '')
+  return `${base}/ws/ssh/${hostId}/?token=${token}`
+}
 
-<!--        } else if (ev.key === 8) {-->
-<!--          // Do not delete the prompt-->
-<!--          if (term._core.buffer.x > 2) {-->
-<!--            // term.write('\b \b')-->
-<!--            term.write(' ');-->
-<!--          }-->
-<!--        } else if (printable) {-->
-<!--          term.write(e.key);-->
-<!--          cmd += e.key-->
-<!--        }-->
-<!--      })-->
-<!--      // term.onData(function (data) {-->
-<!--      //       const printable = !data.altKey && !data.altGraphKey && !data.ctrlKey && !data.metaKey-->
-<!--      //       //data为每个按键输入内容，例如按A，就传递给后端：{'flag': 1, 'data': 'a', 'cols': None, 'rows': None}-->
-<!--      //       let send_data = JSON.stringify(-->
-<!--      //           data-->
-<!--      //       );-->
-<!--      //       //向WebSocket发送消息，也就是输入的每一个按键-->
-<!--      //       if (data.domEvent === "Enter"){-->
-<!--      //         ws.send(send_data)-->
-<!--      //       } else if(printable) {-->
-<!--      //         trem.write(data.key)-->
-<!--      //         send_data += data.key-->
-<!--      //       }-->
-<!--      //   });-->
+function write(text) {
+  term?.write(text)
+}
 
+function cleanupSocket() {
+  if (attachAddon) {
+    attachAddon.dispose()
+    attachAddon = null
+  }
+  if (socket) {
+    socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      socket.close()
+    }
+    socket = null
+  }
+}
 
-<!--    }-->
-<!--  }-->
-<!--}-->
-<!--</script>-->
+function connect() {
+  cleanupSocket()
+  status.value = 'connecting'
+  write('\r\n\x1b[33m正在连接主机...\x1b[0m\r\n')
 
-<!--<style scoped>-->
+  socket = new WebSocket(buildWsUrl())
+  attachAddon = new AttachAddon(socket)
+  term.loadAddon(attachAddon)
 
-<!--</style>-->
-
-<script>
-import 'xterm/css/xterm.css'
-import {Terminal} from 'xterm'
-import {FitAddon} from 'xterm-addon-fit'
-import {AttachAddon} from 'xterm-addon-attach'
-
-export default {
-  name: 'Terminal',
-  // data() {
-  //   return {
-  //     containerId: '3d407466c3df'
-  //   }
-  // },
-  mounted() {
-    var term = new Terminal();
-    var fitAddon = new FitAddon()
-    // let ws = new WebSocket(`ws://api.uric.cn:8000/ws/ssh/${this.$route.params.host_id}/`);
-    var socket = new WebSocket(`ws://api.uric.cn:8000/ws/ssh/${this.$route.params.host_id}/`)
-    var attachAddon = new AttachAddon(socket)
-
-    term.loadAddon(attachAddon)
-    term.loadAddon(fitAddon)
-    term.open(document.getElementById('terminal'))
+  socket.onopen = () => {
+    status.value = 'connected'
     fitAddon.fit()
     term.focus()
-    socket.onopen = () => {
-      socket.send('\n')
-    } // 当连接建立时向终端发送一个换行符，不这么做的话最初终端是没有内容的，输入换行符可让终端显示当前用户的工作路径
+    // 发一个换行，让远端 shell 立即输出一次提示符
+    socket.send('\n')
+  }
 
-    window.onresize = function () { // 窗口尺寸变化时，终端尺寸自适应
-      fitAddon.fit()
+  socket.onerror = () => {
+    status.value = 'error'
+    write('\r\n\x1b[31mWebSocket 连接失败，请确认后端服务与登录状态。\x1b[0m\r\n')
+  }
+
+  socket.onclose = () => {
+    if (status.value !== 'error') {
+      status.value = 'closed'
     }
-
-    this.term = term
-    this.socket = socket
-  },
-  beforeDestroy() {
-    this.socket.close()
-    this.term  }
+    write('\r\n\x1b[33m连接已关闭。\x1b[0m\r\n')
+  }
 }
-</script>.dispose()
+
+function reconnect() {
+  connect()
+}
+
+function goBack() {
+  router.push({ name: 'Host' })
+}
+
+function onResize() {
+  fitAddon?.fit()
+}
+
+async function loadHost() {
+  try {
+    const { data } = await api.get(`/host/${hostId}`)
+    host.value = data
+  } catch (e) {
+    write('\x1b[31m无法读取主机信息。\x1b[0m\r\n')
+  }
+}
+
+onMounted(async () => {
+  term = new Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    scrollback: 2000,
+    fontSize: 14,
+    fontFamily: 'Consolas, "Courier New", monospace',
+    theme: {
+      foreground: '#d9d9d9',
+      background: '#1e1e1e',
+      cursor: '#ffffff',
+    },
+  })
+  fitAddon = new FitAddon()
+  term.loadAddon(fitAddon)
+  term.open(terminalRef.value)
+  fitAddon.fit()
+  window.addEventListener('resize', onResize)
+
+  await loadHost()
+  connect()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+  cleanupSocket()
+  term?.dispose()
+  term = null
+})
+</script>
 
 <style scoped>
-#terminal {
-  height: 100%;
+.console-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 200px);
+  min-height: 320px;
+}
+
+.console-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+}
+
+.console-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.console-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 6px;
+  border-radius: 6px;
+  background: #1e1e1e;
 }
 </style>

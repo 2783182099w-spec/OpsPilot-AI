@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "host",
     'channels',
     'mtask',
+    'ai',
 ]
 
 MIDDLEWARE = [
@@ -204,11 +205,8 @@ CORS_ORIGIN_WHITELIST = (
     'http://www.uric.cn:9000',
 )
 CORS_ALLOW_CREDENTIALS = False  # 是否允许ajax跨域请求时携带cookie，False表示不用，我们后面也用不到cookie，所以关掉它就可以了，以防有人通过cookie来搞我们的网站
-CORS_ALLOW_ORIGINS = True
 
 AUTH_USER_MODEL = 'users.User'
-
-from rest_framework_jwt.authentication import JSONWebTokenAuthentication
 
 # REST_FRAMEWORK = {
 #     # 自定义异常处理
@@ -224,6 +222,8 @@ from rest_framework_jwt.authentication import JSONWebTokenAuthentication
 #
 # }
 REST_FRAMEWORK = {
+    # 自定义异常处理
+    'EXCEPTION_HANDLER': 'uric_api.utils.exceptions.custom_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',  # 使用rest_framework_simplejwt(token)验证身份
         'rest_framework.authentication.SessionAuthentication',  # 基于用户名密码认证方式
@@ -252,6 +252,11 @@ SIMPLE_JWT = {
 }
 
 DEFAULT_KEY_NAME = "global"
+
+# DeepSeek 配置：密钥建议通过环境变量注入，不要提交到代码仓库
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
 
 # 配置channel的通道层
 CHANNEL_LAYERS = {

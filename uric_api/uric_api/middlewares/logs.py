@@ -1,24 +1,21 @@
-from django.utils.deprecation import MiddlewareMixin
+import logging
 import time
 
-import logging
+logger = logging.getLogger("django")
 
 
-class LogMiddleWare(MiddlewareMixin):
-    start = 0
+class LogMiddleWare:
+    """记录耗时超过 0.5 秒的请求，方便定位慢接口。"""
 
-    def process_request(self, request):
-        self.start = time.time()
+    def __init__(self, get_response):
+        self.get_response = get_response
 
-    def process_response(self, request, response):
-        cost_timer = time.time() - self.start
+    def __call__(self, request):
+        start = time.time()
+        response = self.get_response(request)
+        cost = time.time() - start
 
-        print("cost_timer", cost_timer)
-
-        if cost_timer > 0.5:
-            # 警告日志
-            logger = logging.getLogger("django")
-            logger.warning(f"请求路径: {request.path} 耗时{cost_timer}秒")
-
+        if cost > 0.5:
+            logger.warning("请求路径: %s 耗时 %.2f 秒", request.path, cost)
 
         return response

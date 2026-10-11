@@ -1,63 +1,136 @@
-# websocket的视图类代码
-# channels中所有的webscoetk视图类，都必须直接或间接继承于WebsocketConsumer
-from channels.generic.websocket import WebsocketConsumer
-from host.models import Host
+"""WebSocket 终端消费者的实现。
+
+浏览器通过 ``ws/ssh/<host_id>/?token=<JWT>`` 连接，本消费者负责：
+
+1. 校验 JWT，未登录直接拒绝；
+2. 使用全局 SSH 密钥对连接目标主机；
+3. 把 SSH shell 的输出实时转发给浏览器，把浏览器的输入写回 SSH。
+"""
+
+import logging
 from threading import Thread
-from uric_api.utils.key import PkeyManager
+from urllib.parse import parse_qs
+
+from channels.generic.websocket import WebsocketConsumer
 from django.conf import settings
+from django.contrib.auth import get_user_model
+
+from host.models import Host
+from uric_api.utils.key import PkeyManager
 from uric_api.utils.ssh import SSHParamiko
 
+logger = logging.getLogger("django")
+
+
 class SSHCmdConsumer(WebsocketConsumer):
+    """基于 paramiko 的 Web SSH 终端。"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.id = self.scope['url_route']['kwargs']['id']
-        # websocket通讯的管道对象
-        self.ssh_chan = None
-        # 这就是基于paramiko连接远程服务器时的ssh操作对象
+        self.host_id = self.scope["url_route"]["kwargs"]["id"]
         self.ssh = None
+        self.ssh_chan = None
+        self.reader = None
 
-    def read_response(self):
-        while True:
-            data = self.ssh_chan.recv(64 * 1024)
-            if not data:
-                self.close()
-                break
-            self.send(data.decode())
+    # ------------------------------------------------------------------ 鉴权
+    def _token(self):
+        raw = self.scope.get("query_string", b"")
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "ignore")
+        return (parse_qs(raw).get("token") or [""])[0]
 
-    # 4 接收客户端发送过来的指令，并发送给主机执行指令
-    def receive(self, text_data=None, bytes_data=None):
-        data = text_data or bytes_data
-        print('receive:', data, type(data))
-
-        # self.ssh_chan.send(data + '\r\n')
-        self.ssh_chan.send(data)
-
-    def disconnect(self, code):
-        """websocket断开连接以后，服务端这边也要和远程主机关闭ssh通信"""
-        self.ssh_chan.close()
-        self.ssh.close()
-        print('Connection close')
-
-    # 1 请求来了自动触发父类connect方法，我们继承拓展父类的connect方法，因为我们和客户端建立连接的同时，就可以和客户端想要操作的主机建立一个ssh连接通道。
-    def connect(self):
-        print('connect连接来啦')
-        self.accept()  # 建立websocket连接，进行连接的三次握手
-        self.send('Connecting ...\r\n')
-        host = Host.objects.filter(pk=self.id).first()
+    @staticmethod
+    def _get_user(token):
+        if not token:
+            return None
         try:
-            private_key, public_key = PkeyManager.get(settings.DEFAULT_KEY_NAME)
-            print(private_key, public_key)
-            self.ssh = SSHParamiko(host.ip_addr, host.port, host.username, private_key)
-            self.client = self.ssh.get_connected_client()
-        except Exception as e:
-            self.send(f'Exception: {e}\r\n')
-            self.close()
+            from rest_framework_simplejwt.tokens import AccessToken
+
+            validated = AccessToken(token)
+            return get_user_model().objects.filter(pk=validated["user_id"], is_active=True).first()
+        except Exception as exc:  # noqa: BLE001 - 任何校验异常都视为未登录
+            logger.info("WebSocket token 校验失败: %s", exc)
+            return None
+
+    # ------------------------------------------------------------ 连接生命周期
+    def connect(self):
+        self.accept()
+
+        if self._get_user(self._token()) is None:
+            self._reject("认证失败：登录状态无效，请重新登录后再打开终端。")
             return
 
-        self.ssh_chan = self.client.invoke_shell(
-            term='xterm')  # invoke_shell激活shell终端模式，也就是长连接模式，exec_command()函数是将服务器执行完的结果一次性返回给你；invoke_shell()函数类似shell终端，可以将执行结果分批次返回，所以我们接受数据时需要循环的取数据
-        self.ssh_chan.transport.set_keepalive(30)  # 连接中没有任何信息时，该连接能够维持30秒
-        # 和主机的连接一旦建立，主机就会将连接信息返回给服务端和主机的连接通道中，并且以后我们还要在这个通道中进行指令发送和指令结果的读取，所以我们开启单独的线程，去连接中一直等待和获取指令执行结果的返回数据
-        t = Thread(target=self.read_response)
-        t.start()
+        host = Host.objects.filter(pk=self.host_id).first()
+        if host is None:
+            self._reject(f"主机不存在（id={self.host_id}）。")
+            return
+
+        self.send(f"正在连接 {host.username}@{host.ip_addr}:{host.port} ...\r\n")
+
+        try:
+            private_key, _ = PkeyManager.get(settings.DEFAULT_KEY_NAME)
+        except KeyError:
+            self._reject("尚未生成全局 SSH 密钥对，请先在「资产管理」中成功添加一台主机。")
+            return
+
+        try:
+            self.ssh = SSHParamiko(host.ip_addr, host.port, host.username, private_key)
+            if self.ssh.get_connected_client() is None:
+                raise ConnectionError(self.ssh.error_message or "无法建立 SSH 连接")
+            self.ssh_chan = self.ssh.client.invoke_shell(term="xterm")
+            self.ssh_chan.transport.set_keepalive(30)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SSH 连接失败 host=%s: %s", host.ip_addr, exc)
+            self._reject(
+                f"连接失败：{exc}\r\n"
+                "请检查主机地址/端口/账号是否正确，以及该主机的 ~/.ssh/authorized_keys "
+                "是否已包含系统的全局公钥。"
+            )
+            return
+
+        self.reader = Thread(target=self._read_loop, daemon=True)
+        self.reader.start()
+
+    def _reject(self, reason):
+        try:
+            self.send(f"{reason}\r\n")
+        except Exception:  # noqa: BLE001 - 连接可能已经断开
+            pass
+        self.close()
+
+    def _read_loop(self):
+        """持续读取 SSH 输出并推送到浏览器。"""
+        try:
+            while True:
+                data = self.ssh_chan.recv(64 * 1024)
+                if not data:
+                    break
+                self.send(data.decode("utf-8", "ignore"))
+        except Exception:  # noqa: BLE001 - 通道关闭属于正常情况
+            pass
+        finally:
+            try:
+                self.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def receive(self, text_data=None, bytes_data=None):
+        if self.ssh_chan is None:
+            return
+        payload = text_data if text_data is not None else (bytes_data or b"").decode("utf-8", "ignore")
+        try:
+            self.ssh_chan.send(payload)
+        except Exception:  # noqa: BLE001
+            self.close()
+
+    def disconnect(self, code):
+        if self.ssh_chan is not None:
+            try:
+                self.ssh_chan.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if self.ssh is not None and self.ssh.client is not None:
+            try:
+                self.ssh.client.close()
+            except Exception:  # noqa: BLE001
+                pass

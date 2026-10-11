@@ -1,7 +1,5 @@
 from django.db import models
 
-# Create your models here.
-from django.db import models
 from uric_api.utils.models import BaseModel
 
 class CmdTemplateCategory(BaseModel):

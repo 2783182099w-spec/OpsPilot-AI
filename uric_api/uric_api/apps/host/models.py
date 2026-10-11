@@ -1,12 +1,6 @@
 from django.db import models
 
-# Create your models here.
 from uric_api.utils.models import BaseModel
-
-from django.db import models
-
-# Create your models here.
-from uric_api.utils.models import BaseModel, models
 from users.models import User
 
 
