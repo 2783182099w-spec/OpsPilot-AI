@@ -8,6 +8,28 @@
 - 前端：Vue 3 + Vue Router + Vuex + Ant Design Vue 4 + xterm.js + ECharts
 - 数据库：开发用 SQLite（`settings/local.py`），也可切换 MySQL
 
+## 页面展示
+
+### 登录
+
+![登录](docs/images/01-login.png)
+
+### 资产管理
+
+![资产管理](docs/images/02-assets.png)
+
+### Web SSH 终端
+
+![Console 终端](docs/images/03-console.png)
+
+### 批量执行
+
+![批量执行](docs/images/04-batch-exec.png)
+
+### AI 助手
+
+![AI 助手](docs/images/05-ai-assistant.png)
+
 ## 目录结构
 
 ```
