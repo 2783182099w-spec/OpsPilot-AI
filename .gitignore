@@ -27,3 +27,9 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+*.sqlite3
+*.sqlite3-*
+known_hosts
+.venv/
+.local-services.json
