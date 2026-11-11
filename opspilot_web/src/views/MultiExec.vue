@@ -1,268 +1,57 @@
-<template>
-  <div>
-    <h4>已选主机</h4>
-    <a-empty v-if="!selectedHosts.length" description="还没有选择主机，请先点击「选择主机」"/>
-    <div v-else class="tags">
-      <a-tag
-          v-for="(host, index) in selectedHosts"
-          :key="host.id"
-          closable
-          color="blue"
-          @close="removeHost(index)"
-      >
-        {{ host.name }}（{{ host.ip_addr }}:{{ host.port }}）
-      </a-tag>
-    </div>
-
-    <div class="toolbar">
-      <a-button type="primary" @click="openHostModal">
-        <template #icon>
-          <plus-outlined/>
-        </template>
-        选择主机
-      </a-button>
-      <a-button @click="openTemplateModal">
-        <template #icon>
-          <file-text-outlined/>
-        </template>
-        从模板导入
-      </a-button>
-      <a-button :disabled="!content" @click="content = ''">清空命令</a-button>
-    </div>
-
-    <v-ace-editor
-        v-model:value="content"
-        lang="sh"
-        theme="chrome"
-        :options="{ fontSize: 14, showPrintMargin: false, useWorker: false }"
-        style="height: 220px; border: 1px solid #d9d9d9; border-radius: 6px;"
-    />
-
-    <div class="toolbar">
-      <a-button
-          type="primary"
-          :loading="executing"
-          :disabled="!selectedHosts.length || !content"
-          @click="execute"
-      >
-        <template #icon>
-          <thunderbolt-outlined/>
-        </template>
-        开始执行
-      </a-button>
-    </div>
-
-    <a-table
-        v-if="results.length"
-        :data-source="results"
-        :columns="resultColumns"
-        row-key="key"
-        size="middle"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'status'">
-          <a-tag :color="record.res_code === 0 ? 'green' : 'red'">
-            {{ record.res_code === 0 ? '成功' : `退出码 ${record.res_code}` }}
-          </a-tag>
-        </template>
-        <template v-else-if="column.key === 'output'">
-          <pre class="output">{{ record.res_data || '(无输出)' }}</pre>
-        </template>
-      </template>
-    </a-table>
-
-    <a-modal v-model:open="hostModalOpen" title="选择主机" width="900px" @ok="confirmHosts">
-      <div class="toolbar">
-        <a-select
-            v-model:value="categoryFilter"
-            style="width: 200px"
-            placeholder="按类别筛选"
-            allow-clear
-            :options="categoryOptions"
-            @change="loadHosts"
-        />
-        <a-button @click="loadHosts()">
-          <template #icon>
-            <reload-outlined/>
-          </template>
-          刷新
-        </a-button>
-      </div>
-      <a-table
-          :data-source="hosts"
-          :columns="hostColumns"
-          :loading="hostLoading"
-          :row-selection="{ selectedRowKeys, onChange: onSelectChange }"
-          row-key="id"
-          size="small"
-      />
-    </a-modal>
-
-    <a-modal v-model:open="templateModalOpen" title="选择指令模板" width="800px" @ok="confirmTemplate">
-      <a-table
-          :data-source="templates"
-          :columns="templateColumns"
-          :row-selection="{ selectedRowKeys: templateSelectedKeys, onChange: onTemplateSelectChange, type: 'radio' }"
-          row-key="id"
-          size="small"
-      />
-    </a-modal>
-  </div>
-</template>
-
+<template><div class="jobs">
+  <a-alert type="info" show-icon message="命令适合单次查询，Shell / Python 适合可复用作业。脚本在目标主机执行，沿用 SSH 账号权限；平台不会自动安装 Python、第三方包或修改解释器。"/>
+  <a-row :gutter="20" class="workspace"><a-col :xs="24" :xl="8"><a-card title="1. 选择执行目标" :bordered="false"><template #extra><a-button size="small" @click="hostOpen=true;loadHosts()">选择主机</a-button></template><div class="target-count">{{selectedHosts.length}}<small> / 300 台已授权资产</small></div><a-empty v-if="!selectedHosts.length" description="先选择要操作的主机"/><div class="target-list"><div v-for="host in selectedHosts" :key="host.id" class="target"><div><strong>{{host.name}}</strong><small>{{host.ip_addr}}:{{host.port}} · {{environments[host.environment]||host.environment}}</small></div><a-button type="text" danger size="small" @click="selectedHosts=selectedHosts.filter(h=>h.id!==host.id)">移除</a-button></div></div><a-button v-if="selectedHosts.length" type="link" @click="selectedHosts=[]">清空目标</a-button><a-alert v-if="selectedHosts.some(h=>h.environment==='production')" type="warning" message="目标包含生产环境，请核对脚本影响与执行权限。"/></a-card><a-card title="执行约束" :bordered="false" style="margin-top:16px"><p>单机失败独立记录，其他主机继续。</p><p>脚本默认并发 2 台，最多 4 台；单机执行最长 600 秒。</p><p>普通用户提交后需审批，管理员预览确认后排队。</p><p>取消会停止继续派发并关闭通道，不保证所有远端子进程终止。</p></a-card></a-col>
+  <a-col :xs="24" :xl="16"><a-card title="2. 编写与预览作业" :bordered="false"><template #extra><a-space><a-button @click="libraryOpen=true;loadLibrary()">脚本库</a-button><a-button @click="templateOpen=true;loadTemplates()">命令模板</a-button></a-space></template>
+    <a-radio-group v-model:value="mode" button-style="solid" class="mode"><a-radio-button value="command">命令</a-radio-button><a-radio-button value="shell">Shell 脚本</a-radio-button><a-radio-button value="python">Python 3 脚本</a-radio-button></a-radio-group>
+    <a-space wrap class="editor-tools"><a-button v-if="mode!=='command'" @click="fileInput.click()">导入 .sh / .py</a-button><input ref="fileInput" type="file" accept=".sh,.py" hidden @change="readFile"/><a-button v-if="mode!=='command'" @click="useExample">载入只读示例</a-button><a-button @click="content=''">清空正文</a-button><a-button v-if="mode!=='command'&&admin" @click="saveLibrary">{{libraryRef&&mode===libraryRef.language?'保存新版本':'保存到脚本库'}}</a-button></a-space>
+    <a-form v-if="mode!=='command'" layout="vertical"><a-row :gutter="16"><a-col :span="12"><a-form-item label="脚本名称" required><a-input v-model:value="scriptName" :maxlength="100" placeholder="例如：资源与服务状态汇总"/></a-form-item></a-col><a-col :span="12"><a-form-item label="用途与影响说明"><a-input v-model:value="description" :maxlength="1000" placeholder="说明查询或修改什么"/></a-form-item></a-col></a-row></a-form>
+    <v-ace-editor v-model:value="content" :lang="mode==='python'?'python':'sh'" theme="chrome" :options="{fontSize:14,showPrintMargin:false,useWorker:false,tabSize:4}" class="editor"/>
+    <template v-if="mode!=='command'"><div class="script-settings"><label>单机超时 <a-input-number v-model:value="timeout" :min="5" :max="600"/> 秒</label><label>并发主机 <a-input-number v-model:value="concurrency" :min="1" :max="4"/> 台</label><span>正文 {{sourceBytes}} / 65536 字节</span></div><a-form layout="vertical"><a-form-item label="位置参数（作为独立参数传递，不替换源码；不要传密码或密钥）"><div v-for="(arg,index) in args" :key="index" class="arg-row"><span>{{index+1}}</span><a-input v-model:value="args[index]" :maxlength="500" :placeholder="`参数 ${index+1}`"/><a-button danger @click="args.splice(index,1)">移除</a-button></div><a-button :disabled="args.length>=20" @click="args.push('')">添加参数</a-button><small class="hint" v-text="'Shell 中通过 $1、$2 读取；Python 中通过 sys.argv[1]、sys.argv[2] 读取。'"/></a-form-item></a-form><a-alert type="warning" message="脚本不是沙箱：它可以执行 SSH 账号允许的操作。源文件以受限权限投递到随机临时目录，执行前校验摘要和远端语法，结束后尽力清理。请勿在源码内保存凭据。"/></template>
+    <div class="submit-bar"><span>{{mode==='command'?'确认目标与命令后提交':'预览检查不会连接主机或执行脚本'}}</span><a-button type="primary" :loading="busy" :disabled="!selectedHosts.length||!content.trim()" @click="prepare">{{mode==='command'?'确认命令并提交':'预览脚本与执行计划'}}</a-button></div>
+  </a-card></a-col></a-row>
+  <a-modal v-model:open="hostOpen" title="选择主机" width="950px" @ok="hostOpen=false"><a-space wrap class="modal-toolbar"><a-input-search v-model:value="hostSearch" placeholder="名称 / IP / 业务"/><a-select v-model:value="category" allow-clear placeholder="全部分类" style="width:180px" :options="categories.map(c=>({value:c.id,label:c.name}))"/><a-button @click="loadHosts">刷新</a-button><span>已选 {{selectedHosts.length}} 台</span></a-space><a-table :data-source="filteredHosts" :columns="hostColumns" row-key="id" :pagination="{pageSize:10}" :row-selection="{selectedRowKeys:selectedHosts.map(h=>h.id),onChange:selectHosts,preserveSelectedRowKeys:true}"/></a-modal>
+  <a-modal v-model:open="previewOpen" title="3. 确认脚本执行计划" width="1000px" ok-text="确认并提交任务" :confirm-loading="busy" @ok="submitScript"><a-descriptions bordered :column="3"><a-descriptions-item label="脚本">{{preview?.script?.name}}</a-descriptions-item><a-descriptions-item label="解释器">{{mode==='shell'?'bash':'python3'}}</a-descriptions-item><a-descriptions-item label="目标">{{selectedHosts.length}} 台</a-descriptions-item><a-descriptions-item label="单机超时">{{preview?.script?.timeout}} 秒</a-descriptions-item><a-descriptions-item label="并发">{{preview?.script?.concurrency}} 台</a-descriptions-item><a-descriptions-item label="参数数">{{args.length}}</a-descriptions-item></a-descriptions><p class="hash">SHA256：{{preview?.script?.sha256}}</p><div class="preview-hosts"><a-tag v-for="h in selectedHosts" :key="h.id">{{h.name}} · {{h.ip_addr}}</a-tag></div><pre class="preview-source">{{preview?.script?.source}}</pre><p>参数：{{JSON.stringify(preview?.script?.args||[])}}</p><a-alert type="warning" :message="admin?'确认后将排队执行，请核对所有目标和脚本影响。':'确认后提交审批，管理员批准前不会执行。'"/></a-modal>
+  <a-modal v-model:open="libraryOpen" title="脚本库与版本" width="1000px" :footer="null"><a-button @click="loadLibrary">刷新脚本库</a-button><a-table :data-source="library" :columns="libraryColumns" row-key="id"><template #bodyCell="{column,record}"><template v-if="column.key==='language'">{{record.language==='shell'?'Shell':'Python 3'}}</template><template v-if="column.key==='action'"><a-space><a-button @click="loadScript(record)">载入编辑器</a-button><a-button @click="showHistory(record)">版本记录</a-button><a-popconfirm v-if="admin" title="归档后不再出现在脚本库，已提交任务快照不变" @confirm="archive(record)"><a-button danger>归档</a-button></a-popconfirm></a-space></template></template></a-table></a-modal>
+  <a-modal v-model:open="historyOpen" title="脚本版本记录" width="900px" @ok="historyOpen=false"><a-collapse><a-collapse-panel v-for="r in history" :key="r.version" :header="'版本 '+r.version+' · '+r.language"><p>{{r.description}}</p><pre class="preview-source">{{r.source}}</pre></a-collapse-panel></a-collapse></a-modal>
+  <a-modal v-model:open="templateOpen" title="选择命令模板" width="900px" @ok="importTemplate"><a-table :data-source="templates" :columns="[{title:'名称',dataIndex:'name'},{title:'用途',dataIndex:'description'},{title:'命令',dataIndex:'cmd'}]" row-key="id" :row-selection="{type:'radio',selectedRowKeys:templateKeys,onChange:keys=>templateKeys=keys}"/><a-form layout="vertical"><a-form-item v-for="p in selectedTemplate?.parameters||[]" :key="p.name" :label="p.name"><a-select v-if="p.type==='enum'" v-model:value="templateArgs[p.name]" :options="p.choices.map(c=>({value:c,label:c}))"/><a-input v-else v-model:value="templateArgs[p.name]"/></a-form-item></a-form></a-modal>
+</div></template>
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { message, Modal } from 'ant-design-vue'
-import { FileTextOutlined, PlusOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
-import { VAceEditor } from 'vue3-ace-editor'
+import {ref,computed,onMounted,watch} from 'vue'
+import {useStore} from 'vuex'
+import {useRouter} from 'vue-router'
+import {message,Modal} from 'ant-design-vue'
+import {VAceEditor} from 'vue3-ace-editor'
 import 'ace-builds/src-noconflict/mode-sh'
+import 'ace-builds/src-noconflict/mode-python'
 import 'ace-builds/src-noconflict/theme-chrome'
-
 import api from '@/api'
-
-const content = ref('')
-const executing = ref(false)
-const results = ref([])
-
-const hosts = ref([])
-const categories = ref([])
-const templates = ref([])
-const hostLoading = ref(false)
-
-const hostModalOpen = ref(false)
-const templateModalOpen = ref(false)
-const categoryFilter = ref(undefined)
-const selectedRowKeys = ref([])
-const templateSelectedKeys = ref([])
-
-const selectedHosts = ref([])
-
-const hostColumns = [
-  { title: '类别', dataIndex: 'category_name', key: 'category_name' },
-  { title: '主机名称', dataIndex: 'name', key: 'name' },
-  { title: '连接地址', dataIndex: 'ip_addr', key: 'ip_addr' },
-  { title: '端口', dataIndex: 'port', key: 'port' },
-]
-
-const templateColumns = [
-  { title: '模板名称', dataIndex: 'name', key: 'name' },
-  { title: '模板类型', dataIndex: 'category_name', key: 'category_name' },
-  { title: '模板内容', dataIndex: 'cmd', key: 'cmd' },
-]
-
-const resultColumns = [
-  { title: '主机', dataIndex: 'host_name', key: 'host_name' },
-  { title: '连接地址', dataIndex: 'ip_addr', key: 'ip_addr' },
-  { title: '状态', key: 'status', width: 140 },
-  { title: '输出', key: 'output' },
-]
-
-const categoryOptions = computed(() =>
-  categories.value.map((item) => ({ label: item.name, value: item.id }))
-)
-
-function onSelectChange(keys) {
-  selectedRowKeys.value = keys
-}
-
-function onTemplateSelectChange(keys) {
-  templateSelectedKeys.value = keys
-}
-
-function openHostModal() {
-  selectedRowKeys.value = selectedHosts.value.map((host) => host.id)
-  hostModalOpen.value = true
-  loadHosts()
-}
-
-function confirmHosts() {
-  selectedHosts.value = hosts.value.filter((host) => selectedRowKeys.value.includes(host.id))
-  hostModalOpen.value = false
-}
-
-function removeHost(index) {
-  selectedHosts.value.splice(index, 1)
-}
-
-function openTemplateModal() {
-  templateSelectedKeys.value = []
-  templateModalOpen.value = true
-}
-
-function confirmTemplate() {
-  const id = templateSelectedKeys.value[0]
-  const template = templates.value.find((item) => item.id === id)
-  if (!template) {
-    message.warning('请先选择一个模板')
-    return
-  }
-  content.value = template.cmd
-  templateModalOpen.value = false
-}
-
-async function loadHosts() {
-  hostLoading.value = true
-  try {
-    const params = categoryFilter.value ? { category: categoryFilter.value } : {}
-    const { data } = await api.get('/host/', { params })
-    hosts.value = data
-  } finally {
-    hostLoading.value = false
-  }
-}
-
-async function loadMeta() {
-  const [categoryRes, templateRes] = await Promise.all([
-    api.get('/host/category'),
-    api.get('/mtask/templates'),
-  ])
-  categories.value = categoryRes.data
-  templates.value = templateRes.data
-}
-
-async function execute() {
-  Modal.confirm({ title: '确认执行任务', content: `将向 ${selectedHosts.value.length} 台主机提交命令。请确认命令和目标环境。`, onOk: submitTask })
-}
-
-async function submitTask() {
-  executing.value = true
-  try {
-    const { data } = await api.post('/mtask/tasks', {
-      host_ids: selectedHosts.value.map((host) => host.id),
-      cmd: content.value,
-      confirmed: true,
-    })
-    message.success(`任务 ${data.id} 已提交，请在任务中心查看进度或审批状态`)
-  } catch (e) {
-    // 错误提示由 api 拦截器统一处理
-  } finally {
-    executing.value = false
-  }
-}
-
-onMounted(() => {
-  loadHosts()
-  loadMeta()
-})
+const store=useStore(),router=useRouter(),admin=computed(()=>store.getters.userInfo?.is_superuser),mode=ref('command'),bodies=ref({command:'',shell:'',python:''}),content=computed({get:()=>bodies.value[mode.value],set:value=>bodies.value[mode.value]=value})
+const selectedHosts=ref([]),hosts=ref([]),categories=ref([]),hostOpen=ref(false),hostSearch=ref(''),category=ref(),scriptName=ref('临时脚本'),description=ref(''),args=ref([]),timeout=ref(120),concurrency=ref(2),fileInput=ref(),busy=ref(false),previewOpen=ref(false),preview=ref(null)
+const library=ref([]),libraryOpen=ref(false),libraryRef=ref(null),history=ref([]),historyOpen=ref(false),templates=ref([]),templateOpen=ref(false),templateKeys=ref([]),templateArgs=ref({})
+const sourceBytes=computed(()=>new TextEncoder().encode(content.value).length)
+const environments={test:'测试',staging:'保障 / 验收',production:'生产',other:'其他'}
+const filteredHosts=computed(()=>hosts.value.filter(h=>(!category.value||h.category===category.value)&&`${h.name} ${h.ip_addr} ${h.business}`.toLowerCase().includes(hostSearch.value.toLowerCase())))
+const selectedTemplate=computed(()=>templates.value.find(t=>t.id===templateKeys.value[0]))
+const hostColumns=[{title:'分类',dataIndex:'category_name'},{title:'名称',dataIndex:'name'},{title:'地址',dataIndex:'ip_addr'},{title:'业务',dataIndex:'business'}]
+const libraryColumns=[{title:'名称',dataIndex:'name'},{title:'语言',key:'language'},{title:'版本',dataIndex:'version'},{title:'用途',dataIndex:'description'},{title:'操作',key:'action'}]
+watch(templateKeys,()=>{templateArgs.value=Object.fromEntries((selectedTemplate.value?.parameters||[]).map(p=>[p.name,p.default??'']))})
+function selectHosts(keys){const cache=new Map([...selectedHosts.value,...hosts.value].map(h=>[h.id,h]));selectedHosts.value=keys.map(id=>cache.get(id)).filter(Boolean)}
+async function loadHosts(){const [a,b]=await Promise.all([api.get('/host/'),api.get('/host/category')]);hosts.value=a.data;categories.value=b.data}
+async function loadTemplates(){templates.value=(await api.get('/mtask/templates')).data}
+async function importTemplate(){if(!selectedTemplate.value){message.warning('请选择模板');return}const {data}=await api.post(`/mtask/templates/${selectedTemplate.value.id}`,{parameters:templateArgs.value});mode.value='command';content.value=data.command;templateOpen.value=false}
+function scriptPayload(){return {name:scriptName.value,language:mode.value,source:content.value,args:args.value,timeout:timeout.value,concurrency:concurrency.value}}
+async function prepare(){if(mode.value==='command'){Modal.confirm({title:'确认批量执行命令',content:`向 ${selectedHosts.value.length} 台主机提交命令；请确认目标和影响。`,okText:'提交任务',cancelText:'取消',onOk:submitCommand});return}busy.value=true;try{preview.value=(await api.post('/mtask/scripts/preview',{host_ids:selectedHosts.value.map(h=>h.id),script:scriptPayload()})).data;previewOpen.value=true}finally{busy.value=false}}
+async function submitCommand(){busy.value=true;try{const {data}=await api.post('/mtask/tasks',{host_ids:selectedHosts.value.map(h=>h.id),cmd:content.value,confirmed:true});router.push({name:'TaskCenter',query:{task:String(data.id)}})}finally{busy.value=false}}
+async function submitScript(){busy.value=true;try{const body={kind:'script',host_ids:selectedHosts.value.map(h=>h.id),script:scriptPayload(),preview_token:preview.value.preview_token,confirmed:true};if(libraryRef.value&&content.value===libraryRef.value.source&&mode.value===libraryRef.value.language){body.script_id=libraryRef.value.id;body.script_version=libraryRef.value.version}const {data}=await api.post('/mtask/tasks',body);previewOpen.value=false;router.push({name:'TaskCenter',query:{task:String(data.id)}})}finally{busy.value=false}}
+async function readFile(event){const file=event.target.files?.[0];event.target.value='';if(!file)return;if(file.size>65536||!(/\.(sh|py)$/i.test(file.name))){message.error('请选择不超过 64 KiB 的 .sh 或 .py 文件');return}try{const text=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());mode.value=file.name.toLowerCase().endsWith('.py')?'python':'shell';content.value=text;scriptName.value=file.name;libraryRef.value=null;message.success('文件已载入编辑器，尚未执行')}catch{message.error('无法读取 UTF-8 文本，请检查文件编码')}}
+function useExample(){libraryRef.value=null;scriptName.value=mode.value==='python'?'Python 系统信息查询':'Shell 系统信息查询';description.value='只读打印主机与系统信息，不修改配置';content.value=mode.value==='python'?'import platform, sys\nprint("host:", platform.node())\nprint("system:", platform.platform())\nprint("args:", sys.argv[1:])\n':'#!/usr/bin/env bash\nset -euo pipefail\nprintf "host: %s\\n" "$(hostname)"\nuname -sr\ndf -h /\nprintf "args: %s\\n" "$*"\n'}
+async function loadLibrary(){library.value=(await api.get('/mtask/scripts')).data}
+async function loadScript(row){const {data}=await api.get(`/mtask/scripts/${row.id}`);libraryRef.value=data.script;mode.value=data.script.language;content.value=data.script.source;scriptName.value=data.script.name;description.value=data.script.description;libraryOpen.value=false}
+async function saveLibrary(){busy.value=true;try{const body={...scriptPayload(),description:description.value};if(libraryRef.value&&mode.value===libraryRef.value.language){body.expected_version=libraryRef.value.version;const {data}=await api.patch(`/mtask/scripts/${libraryRef.value.id}`,body);libraryRef.value={...data,source:content.value}}else{const {data}=await api.post('/mtask/scripts',body);libraryRef.value={...data,source:content.value}}message.success('脚本版本已保存，已提交任务不受影响');loadLibrary()}finally{busy.value=false}}
+async function showHistory(row){const {data}=await api.get(`/mtask/scripts/${row.id}`);history.value=[{...data.script},...data.revisions];historyOpen.value=true}
+async function archive(row){await api.delete(`/mtask/scripts/${row.id}`);await loadLibrary()}
+onMounted(loadHosts)
 </script>
-
 <style scoped>
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0;
-}
-
-.tags {
-  margin-bottom: 8px;
-}
-
-.output {
-  margin: 0;
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
+.jobs{max-width:1700px;margin:auto}.workspace{margin-top:20px}.target-count{font-size:36px;font-weight:700;color:#123252}.target-count small{font-size:13px;color:var(--muted);font-weight:400}.target-list{max-height:430px;overflow:auto;margin:12px 0}.target{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #eef1f6}.target small{display:block;color:var(--muted);margin-top:5px}.mode{margin-bottom:16px}.editor-tools{float:right;margin-bottom:16px}.editor{height:340px;border:1px solid #d9e1ec;border-radius:6px;clear:both}.script-settings{display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin:18px 0;color:#52627a}.arg-row{display:flex;gap:10px;align-items:center;margin-bottom:8px}.hint{display:block;color:var(--muted);margin-top:8px}.submit-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:22px}.submit-bar span{color:var(--muted)}.modal-toolbar{margin-bottom:16px}.preview-source{white-space:pre-wrap;word-break:break-word;max-height:380px;overflow:auto;background:#101d32;color:#e5efff;border-radius:8px;padding:18px}.hash{font:12px monospace;word-break:break-all;color:var(--muted)}.preview-hosts{max-height:100px;overflow:auto;margin:14px 0}@media(max-width:1100px){.editor-tools{float:none}.workspace>.ant-col{margin-bottom:16px}}
 </style>

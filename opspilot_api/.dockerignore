@@ -1,0 +1,9 @@
+**/__pycache__
+**/*.pyc
+**/*.sqlite3
+**/*.sqlite3-*
+**/local_secret.py
+logs
+upload_files
+.env*
+known_hosts

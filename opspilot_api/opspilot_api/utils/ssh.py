@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from paramiko.ssh_exception import (
     AuthenticationException,
+    BadHostKeyException,
     NoValidConnectionsError,
     SSHException,
 )
@@ -22,6 +23,7 @@ class SSHParamiko:
 
         self.client = None
         self.error_message = None
+        self.error_code = None
         self.params = {
             "hostname": hostname,
             "port": port,
@@ -49,8 +51,13 @@ class SSHParamiko:
             client.connect(**self.params, allow_agent=False, look_for_keys=False)
         except (TimeoutError, NoValidConnectionsError, AuthenticationException, SSHException) as exc:
             client.close()
+            self.error_code = ('fingerprint_changed' if isinstance(exc,BadHostKeyException)
+                               else 'authentication_failed' if isinstance(exc,AuthenticationException)
+                               else 'connect_timeout' if isinstance(exc,TimeoutError)
+                               else 'connection_failed')
             self.error_message = str(exc) or exc.__class__.__name__
             if "not found in known_hosts" in self.error_message:
+                self.error_code = "fingerprint_missing"
                 self.error_message = "尚未登记该主机的 SSH 指纹，请管理员先在资产管理中登记可信主机公钥；当前尚未进行密码校验"
             return None
 
@@ -85,7 +92,7 @@ class SSHParamiko:
         if code != 0:
             raise RuntimeError(f"添加公钥失败: {output}")
 
-    def execute_cmd(self, cmd, timeout=60):
+    def execute_cmd(self, cmd, timeout=60, stop_event=None, on_output=None, max_output=65536):
         """执行命令，返回 (退出码, 输出)。"""
         cmd = "set -e\n" + cmd
         channel = self.client.get_transport().open_session(timeout=10)
@@ -96,12 +103,17 @@ class SSHParamiko:
         output = bytearray()
         try:
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    raise InterruptedError("已停止等待并关闭 SSH 通道；远端命令是否终止需要人工核查")
                 if time.monotonic() > deadline:
                     raise TimeoutError("命令执行超时")
                 if channel.recv_ready():
-                    output.extend(channel.recv(32768))
-                    if len(output) > 1024 * 1024:
-                        raise ValueError("命令输出超过 1MB")
+                    chunk = channel.recv(16384)
+                    output.extend(chunk)
+                    if on_output:
+                        on_output(chunk)
+                    if len(output) > max_output:
+                        raise ValueError("命令输出超过限制，请缩小查询范围或通过文件传输获取日志")
                 elif channel.exit_status_ready():
                     return channel.recv_exit_status(), output.decode("utf-8", errors="replace")
                 else:

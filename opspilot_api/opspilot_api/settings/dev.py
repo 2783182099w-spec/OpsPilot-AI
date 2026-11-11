@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/3.2/ref/settings/
 """
 
 from pathlib import Path
+import json
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     'channels',
     'mtask',
     'ai',
+    'monitoring',
 ]
 
 MIDDLEWARE = [
@@ -225,12 +227,10 @@ REST_FRAMEWORK = {
     # 自定义异常处理
     'EXCEPTION_HANDLER': 'opspilot_api.utils.exceptions.custom_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',  # 使用rest_framework_simplejwt(token)验证身份
-        'rest_framework.authentication.SessionAuthentication',  # 基于用户名密码认证方式
-        'rest_framework.authentication.BasicAuthentication'  # 基于Session认证方式
+        'users.tokens.AccountJWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated'  # 默认权限为验证用户
+        'users.access.OpsAccess'
     ],
 }
 
@@ -246,6 +246,7 @@ import datetime
 SIMPLE_JWT = {
     # token有效时长
     'AUTH_HEADER_TYPES': ('jwt', 'Bearer'),
+    'UPDATE_LAST_LOGIN': True,
     'ACCESS_TOKEN_LIFETIME': datetime.timedelta(minutes=30),
     # token刷新后的有效时间
     'REFRESH_TOKEN_LIFETIME': datetime.timedelta(days=1),
@@ -273,3 +274,11 @@ ASGI_APPLICATION = 'opspilot_api.routing.application'
 
 SSH_KNOWN_HOSTS = os.environ.get("SSH_KNOWN_HOSTS", "")
 SSH_KEY_ENCRYPTION_KEY = os.environ.get("SSH_KEY_ENCRYPTION_KEY", "")
+
+# Prometheus is configured by operators, never by a client supplied URL.
+PROMETHEUS_URL = os.environ.get('PROMETHEUS_URL', 'http://127.0.0.1:9090')
+MONITOR_CONFIG_DIR = Path(os.environ.get('MONITOR_CONFIG_DIR', str(BASE_DIR.parent.parent / '.runtime' / 'prometheus')))
+
+# Application release policies are provisioned separately from user-supplied manifests.
+OPSPILOT_RELEASE_TARGETS = json.loads(os.environ.get('OPSPILOT_RELEASE_TARGETS', '{}'))
+OPSPILOT_AUTOMATIC_REPAIR = os.environ.get('OPSPILOT_AUTOMATIC_REPAIR', '0') == '1'

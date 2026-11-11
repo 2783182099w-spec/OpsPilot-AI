@@ -2,6 +2,7 @@
   "name": "opspilot_web",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.32.1",
   "scripts": {
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build"

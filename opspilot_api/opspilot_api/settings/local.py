@@ -21,6 +21,8 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db_local.sqlite3",
+        # 后台执行器和监控同步器会并发写入，事务开始时先等待写锁。
+        "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
     }
 }
 

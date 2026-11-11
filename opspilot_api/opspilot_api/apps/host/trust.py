@@ -12,7 +12,7 @@ from paramiko import HostKeys
 from paramiko.hostkeys import HostKeyEntry
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from users.access import OpsAccess
 
 from .permissions import accessible_hosts
 
@@ -20,7 +20,7 @@ _lock = Lock()
 
 
 class HostTrustView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
 
     def post(self, request, pk):
         if not request.user.is_superuser:

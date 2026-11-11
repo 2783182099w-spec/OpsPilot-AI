@@ -36,7 +36,10 @@ class HostModelSerializer(serializers.ModelSerializer):
             "password",
             "tags",
             "asset_status",
+            "environment", "business", "owner_label", "os_name", "purpose",
+            "connection_state", "last_checked_at", "last_check_note",
         ]
+        read_only_fields = ["connection_state", "last_checked_at", "last_check_note"]
 
     @staticmethod
     def ensure_global_key():

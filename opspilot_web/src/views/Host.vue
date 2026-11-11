@@ -1,20 +1,21 @@
 <template>
   <div>
+    <workspace-heading section="资产与作业 / ASSETS" title="资产管理" description="维护主机信息、连接状态及 SSH 信任配置。"/>
     <div class="toolbar">
-      <a-input-search v-model:value="search" placeholder="搜索名称、地址、备注" style="width: 260px" @search="load" />
-      <a-button type="primary" @click="openHostModal">
+      <a-input-search v-model:value="search" placeholder="搜索名称、地址、备注" style="width: 260px" @search="page=1;load()" />
+      <a-button v-if="store.getters.userInfo?.is_superuser" type="primary" @click="openHostModal">
         <template #icon>
           <plus-outlined/>
         </template>
         新建主机
       </a-button>
-      <a-button @click="openCategoryModal">
+      <a-button v-if="store.getters.userInfo?.is_superuser" @click="openCategoryModal">
         <template #icon>
           <folder-add-outlined/>
         </template>
         新建类别
       </a-button>
-      <a-button @click="openImportModal">
+      <a-button v-if="store.getters.userInfo?.is_superuser" @click="openImportModal">
         <template #icon>
           <upload-outlined/>
         </template>
@@ -27,17 +28,27 @@
         刷新
       </a-button>
       <a-button @click="exportHosts">导出资产</a-button>
+      <a-button v-if="store.getters.canOperate" :disabled="!hosts.length" @click="probePage">检测本页在线状态</a-button>
+      <a-select v-model:value="environmentFilter" placeholder="环境" allow-clear style="width:130px" :options="[{value:'test',label:'测试'},{value:'staging',label:'验收'},{value:'production',label:'生产'},{value:'other',label:'其他'}]" @change="page=1;load()" />
+      <a-select v-model:value="connectionFilter" placeholder="SSH 端口状态" allow-clear style="width:170px" :options="[{value:'unknown',label:'未知'},{value:'reachable',label:'最近检测可达'},{value:'unreachable',label:'最近检测不可达'}]" @change="page=1;load()" />
     </div>
 
-    <a-table :data-source="hosts" :columns="columns" :loading="loading" row-key="id" size="middle" :pagination="{ current: page, total, pageSize: 20 }" @change="changePage">
+    <a-table :data-source="hosts" :columns="columns" :loading="loading" row-key="id" size="middle" :scroll="{x:1050}" :pagination="{ current: page, total, pageSize: 20 }" @change="changePage">
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'console'">
-          <router-link :to="{ name: 'Console', params: { host_id: record.id } }">
-            <a-button type="link" size="small">Console</a-button>
+        <template v-if="column.dataIndex === 'connection_state'"><a-tooltip :title="`最近检测：${record.last_checked_at || '未检测'}；${record.last_check_note || '可在巡检页检测 SSH 端口'}`"><a-badge :status="({green:'success',red:'error'})[stateColor[record.connection_state]] || 'default'" :text="record.connection_state==='reachable'?'在线（最近检测）':record.connection_state==='unreachable'?'离线（最近检测）':'未检测'" /></a-tooltip></template>
+        <template v-else-if="column.key === 'console'">
+          <router-link v-if="store.getters.canOperate" :to="{ name: 'Console', params: { host_id: record.id } }">
+            <a-button type="link" size="small">SSH</a-button>
           </router-link>
         </template>
         <template v-else-if="column.key === 'action'">
-          <a-button v-if="store.getters.userInfo?.is_superuser" type="link" size="small" @click="openTrustModal(record)">登记指纹</a-button>
+          <router-link :to="{name:'HostWorkbench',params:{id:record.id}}"><a-button type="link" size="small">工作台</a-button></router-link>
+          <a-button type="link" size="small" @click="showDetail(record)">详情</a-button>
+          <template v-if="store.getters.canOperate">
+          <a-button type="link" size="small" @click="fileHost=record">文件</a-button>
+          </template>
+          <template v-if="store.getters.userInfo?.is_superuser">
+          <a-button type="link" size="small" @click="openTrustModal(record)">登记指纹</a-button>
           <a-button type="link" size="small" @click="editHost(record)">编辑</a-button>
           <a-button type="link" size="small" @click="openKeyModal(record)">同步密钥</a-button>
           <a-popconfirm
@@ -48,6 +59,7 @@
           >
             <a-button type="link" danger size="small">删除</a-button>
           </a-popconfirm>
+          </template>
         </template>
       </template>
     </a-table>
@@ -100,6 +112,11 @@
         <a-form-item label="备注" name="description">
           <a-textarea v-model:value="hostForm.description" :rows="3" placeholder="选填"/>
         </a-form-item>
+        <a-form-item label="环境"><a-select v-model:value="hostForm.environment" :options="[{value:'test',label:'测试'},{value:'staging',label:'验收'},{value:'production',label:'生产'},{value:'other',label:'其他'}]" /></a-form-item>
+        <a-form-item label="所属业务"><a-input v-model:value="hostForm.business" :maxlength="100" /></a-form-item>
+        <a-form-item label="负责人"><a-input v-model:value="hostForm.owner_label" :maxlength="100" /></a-form-item>
+        <a-form-item label="操作系统"><a-input v-model:value="hostForm.os_name" :maxlength="150" placeholder="手工填写，成功巡检后可更新版本信息" /></a-form-item>
+        <a-form-item label="用途"><a-input v-model:value="hostForm.purpose" :maxlength="300" /></a-form-item>
         <a-form-item label="标签"><a-select v-model:value="hostForm.tags" mode="tags" style="width: 100%" /></a-form-item>
         <a-form-item label="资产状态"><a-select v-model:value="hostForm.asset_status" :options="[{value:'unknown',label:'未知'},{value:'active',label:'使用中'},{value:'maintenance',label:'维护中'},{value:'retired',label:'已下线'}]" /></a-form-item>
       </a-form>
@@ -190,10 +207,18 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256</pre>
       <p>粘贴第一条命令输出的一行公钥，下一步核对 SHA256 指纹。若没有 ed25519 公钥，可使用 ssh_host_rsa_key.pub。</p>
       <a-textarea v-model:value="trustPublicKey" :rows="4" placeholder="ssh-ed25519 AAAA..." />
     </a-modal>
+    <a-modal :open="!!detailHost" title="资产详情与变更记录" width="950px" @cancel="detailHost=null" @ok="detailHost=null">
+      <a-descriptions v-if="detailHost" bordered :column="2"><a-descriptions-item v-for="key in ['name','ip_addr','port','environment','business','owner_label','os_name','purpose','asset_status','connection_state','last_checked_at','last_check_note']" :key="key" :label="key">{{detailHost[key]}}</a-descriptions-item></a-descriptions>
+      <p>端口检测可达不代表服务健康；状态旁的时间用于判断结果是否过期。</p>
+      <a-collapse><a-collapse-panel v-for="item in changes" :key="item.id" :header="`${item.created_at} ${item.actor__username || ''}`"><pre style="white-space:pre-wrap">{{JSON.stringify(item.changes,null,2)}}</pre></a-collapse-panel></a-collapse>
+    </a-modal>
+    <a-modal :open="!!fileHost" title="SFTP 文件传输" width="1100px" :footer="null" @cancel="fileHost=null"><FileManager v-if="fileHost" :key="fileHost.id" :host="fileHost" /></a-modal>
   </div>
 </template>
 
 <script setup>
+import WorkspaceHeading from '@/components/WorkspaceHeading.vue'
+import {stateColor} from '@/utils/signals'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { useStore } from 'vuex'
@@ -205,6 +230,9 @@ import {
 } from '@ant-design/icons-vue'
 
 import api from '@/api'
+import FileManager from '@/components/FileManager.vue'
+const detailHost=ref(null),fileHost=ref(null),changes=ref([]),environmentFilter=ref(),connectionFilter=ref()
+async function showDetail(host){detailHost.value=(await api.get(`/host/${host.id}`)).data;changes.value=(await api.get(`/host/${host.id}/changes`)).data}
 const store = useStore()
 const trustModalOpen = ref(false), trustPublicKey = ref(''), trustTarget = ref(null)
 function openTrustModal(host) { trustTarget.value = host; trustPublicKey.value = ''; trustModalOpen.value = true }
@@ -243,6 +271,7 @@ const hostFormRef = ref(null)
 const categoryFormRef = ref(null)
 
 const hostForm = reactive({
+  environment:'test',business:'',owner_label:'',os_name:'',purpose:'',
   tags: [],
   asset_status: 'unknown',
   category: undefined,
@@ -269,6 +298,9 @@ const categoryRules = {
 }
 
 const columns = [
+  {title:'在线状态',dataIndex:'connection_state',width:180},
+  {title:'环境',dataIndex:'environment'},
+  {title:'业务',dataIndex:'business'},
   { title: '资产状态', dataIndex: 'asset_status' },
   { title: '标签', dataIndex: 'tags' },
   { title: '类别', dataIndex: 'category_name', key: 'category_name' },
@@ -277,7 +309,7 @@ const columns = [
   { title: '端口', dataIndex: 'port', key: 'port', width: 90 },
   { title: '备注', dataIndex: 'description', key: 'description' },
   { title: 'Console', key: 'console', width: 110 },
-  { title: '操作', key: 'action', width: 180 },
+  { title: '操作', key: 'action', width: 250 },
 ]
 
 const keyModalOpen = ref(false)
@@ -300,7 +332,7 @@ async function load() {
   loading.value = true
   try {
     const [hostRes, categoryRes] = await Promise.all([
-      api.get('/host/', { params: { search: search.value, page: page.value } }),
+      api.get('/host/', { params: { search: search.value, page: page.value, environment:environmentFilter.value, connection_state:connectionFilter.value } }),
       api.get('/host/category'),
     ])
     hosts.value = hostRes.data.results
@@ -314,6 +346,7 @@ async function load() {
 function openHostModal() {
   editingId.value = null
   Object.assign(hostForm, {
+    environment:'test',business:'',owner_label:'',os_name:'',purpose:'',
     category: undefined,
     name: '',
     username: 'root',
@@ -439,9 +472,13 @@ async function submitImport() {
   }
 }
 
+function probePage(){
+  Modal.confirm({title:'检测本页主机在线状态',content:`将检测本页 ${hosts.value.length} 台主机的 SSH TCP 端口，不登录、不修改服务器；结果完成后请刷新资产。`,okText:'开始检测',cancelText:'取消',onOk:async()=>{const {data}=await api.post('/mtask/tasks',{kind:'probe',host_ids:hosts.value.map(h=>h.id),confirmed:true});message.success(`检测任务 #${data.id} 已提交，可在任务中心查看；完成后刷新本页状态`)}})
+}
 onMounted(load)
 const editingId = ref(null)
 function editHost(host) {
+  Object.assign(hostForm,{environment:host.environment,business:host.business,owner_label:host.owner_label,os_name:host.os_name,purpose:host.purpose})
   editingId.value = host.id
   Object.assign(hostForm, { category: host.category, name: host.name, ip_addr: host.ip_addr, port: host.port, username: host.username, description: host.description, password: '', tags: host.tags || [], asset_status: host.asset_status || 'unknown' })
   hostModalOpen.value = true

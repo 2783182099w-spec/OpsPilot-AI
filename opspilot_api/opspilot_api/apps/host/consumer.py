@@ -8,21 +8,29 @@
 """
 
 import logging
-from threading import Thread
+import json
+import socket
+import time
+import codecs
+from threading import Thread, Event, BoundedSemaphore, Lock
 from urllib.parse import parse_qs
 
 from channels.generic.websocket import WebsocketConsumer
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.db import close_old_connections
+from users.access import is_observer
+from users.tokens import terminal_user
 
 from host.models import Host
 from host.models import SSHSession
+from host.session_records import TextRecorder, prune_text
 from django.utils import timezone
 from host.permissions import accessible_hosts
 from opspilot_api.utils.key import PkeyManager
 from opspilot_api.utils.ssh import SSHParamiko
 
 logger = logging.getLogger("django")
+_terminal_slots = BoundedSemaphore(12)
 
 
 class SSHCmdConsumer(WebsocketConsumer):
@@ -35,6 +43,14 @@ class SSHCmdConsumer(WebsocketConsumer):
         self.ssh_chan = None
         self.reader = None
         self.audit_id = None
+        self.recorder = None
+        self.stop_event = Event()
+        self.slot_acquired = False
+        self.last_input = time.monotonic()
+        self.token_expires = 0
+        self.last_auth_check = 0
+        self.authorized = False
+        self.cleanup_lock = Lock()
 
     # ------------------------------------------------------------------ 鉴权
     def _token(self):
@@ -48,13 +64,19 @@ class SSHCmdConsumer(WebsocketConsumer):
         if not token:
             return None
         try:
-            from rest_framework_simplejwt.tokens import AccessToken
-
-            validated = AccessToken(token)
-            return get_user_model().objects.filter(pk=validated["user_id"], is_active=True).first()
-        except Exception as exc:  # noqa: BLE001 - 任何校验异常都视为未登录
-            logger.info("WebSocket token 校验失败: %s", exc)
+            return terminal_user(token)
+        except Exception:
             return None
+
+    def _still_authorized(self):
+        now = time.monotonic()
+        if now-self.last_auth_check >= 5:
+            close_old_connections()
+            user = self._get_user(self._token())
+            self.authorized = bool(user and not is_observer(user) and
+                                   accessible_hosts(user).filter(pk=self.host_id).exists())
+            self.last_auth_check = now
+        return self.authorized
 
     # ------------------------------------------------------------ 连接生命周期
     def connect(self):
@@ -63,13 +85,19 @@ class SSHCmdConsumer(WebsocketConsumer):
         if user is None:
             self.close(code=4401)
             return
-        if not accessible_hosts(user).filter(pk=self.host_id).exists():
+        if is_observer(user) or not accessible_hosts(user).filter(pk=self.host_id).exists():
             self.close(code=4403)
             return
+        if not _terminal_slots.acquire(blocking=False):
+            self.close(code=4429)
+            return
+        self.slot_acquired = True
+        from rest_framework_simplejwt.tokens import AccessToken
+        self.token_expires = int(AccessToken(self._token())['exp'])
         self.accept()
         self.audit_id = SSHSession.objects.create(owner=user, host_id=self.host_id).id
 
-        if self._get_user(self._token()) is None:
+        if not self._still_authorized():
             self._reject("认证失败：登录状态无效，请重新登录后再打开终端。")
             return
 
@@ -91,6 +119,7 @@ class SSHCmdConsumer(WebsocketConsumer):
             if self.ssh.get_connected_client() is None:
                 raise ConnectionError(self.ssh.error_message or "无法建立 SSH 连接")
             self.ssh_chan = self.ssh.client.invoke_shell(term="xterm")
+            self.ssh_chan.settimeout(1)
             self.ssh_chan.transport.set_keepalive(30)
         except Exception as exc:  # noqa: BLE001
             logger.warning("SSH 连接失败 host=%s: %s", host.ip_addr, exc)
@@ -101,6 +130,10 @@ class SSHCmdConsumer(WebsocketConsumer):
             )
             return
 
+        prune_text()
+        SSHSession.objects.filter(pk=self.audit_id).update(host_label=f'{host.name} ({host.ip_addr}:{host.port})'[:200])
+        self.recorder = TextRecorder(self.audit_id)
+        self.send('\r\n本会话保存脱敏后的终端输出文本（最多 256 KiB，保留 30 天或最近 1000 个会话）；不记录原始键盘输入，请勿在终端显示凭据。\r\n')
         self.reader = Thread(target=self._read_loop, daemon=True)
         SSHSession.objects.filter(pk=self.audit_id).update(status="connected")
         self.reader.start()
@@ -113,28 +146,84 @@ class SSHCmdConsumer(WebsocketConsumer):
         except Exception:  # noqa: BLE001 - 连接可能已经断开
             pass
         self.close()
+        self._cleanup()
 
     def _read_loop(self):
         """持续读取 SSH 输出并推送到浏览器。"""
         try:
-            while True:
-                data = self.ssh_chan.recv(64 * 1024)
+            decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+            window, sent = time.monotonic(), 0
+            while not self.stop_event.is_set():
+                if not self._still_authorized():
+                    self.send('\r\n会话授权已撤回。\r\n')
+                    break
+                if time.monotonic() - self.last_input > 900 or time.time() >= self.token_expires:
+                    self.send('\r\n会话已过期或空闲超过 15 分钟，请重新认证连接。\r\n')
+                    break
+                try:
+                    data = self.ssh_chan.recv(16384)
+                except socket.timeout:
+                    continue
                 if not data:
                     break
-                self.send(data.decode("utf-8", "ignore"))
+                elapsed = time.monotonic() - window
+                if elapsed >= 1:
+                    window, sent = time.monotonic(), 0
+                elif sent + len(data) > 131072:
+                    if self.stop_event.wait(1-elapsed):
+                        break
+                    window, sent = time.monotonic(), 0
+                sent += len(data)
+                text = decoder.decode(data)
+                self.send(text)
+                try:
+                    self.recorder.append(text)
+                except Exception:
+                    logger.exception('会话文本写入失败 session=%s', self.audit_id)
         except Exception:  # noqa: BLE001 - 通道关闭属于正常情况
             pass
         finally:
             try:
+                if self.recorder:
+                    self.recorder.flush(final=True)
+                SSHSession.objects.filter(pk=self.audit_id, ended_at__isnull=True).update(status='closed', ended_at=timezone.now())
+            except Exception:
+                logger.exception('会话文本结束保存失败 session=%s', self.audit_id)
+            try:
                 self.close()
             except Exception:  # noqa: BLE001
                 pass
+            self._cleanup()
+            close_old_connections()
 
     def receive(self, text_data=None, bytes_data=None):
         if self.ssh_chan is None:
             return
+        if self.audit_id and not self._still_authorized():
+            self.close(code=4403)
+            self._cleanup()
+            return
         payload = text_data if text_data is not None else (bytes_data or b"").decode("utf-8", "ignore")
+        if len(payload) > 32768:
+            self._reject('单次输入过大，请通过文件传输上传脚本')
+            return
         try:
+            try:
+                control = json.loads(payload)
+            except (ValueError, TypeError):
+                control = None
+            if isinstance(control, dict) and control.get('type') in ('ping', 'resize', 'input'):
+                if control['type'] == 'ping':
+                    return
+                if control['type'] == 'resize':
+                    cols, rows = control.get('cols'), control.get('rows')
+                    if type(cols) is int and type(rows) is int and 10 <= cols <= 500 and 2 <= rows <= 200:
+                        self.ssh_chan.resize_pty(width=cols, height=rows)
+                    return
+                payload = control.get('data', '')
+                if not isinstance(payload, str):
+                    return
+            self.last_input = time.monotonic()
             self.ssh_chan.send(payload)
         except Exception:  # noqa: BLE001
             self.close()
@@ -142,11 +231,19 @@ class SSHCmdConsumer(WebsocketConsumer):
     def disconnect(self, code):
         if self.audit_id:
             SSHSession.objects.filter(pk=self.audit_id, ended_at__isnull=True).update(status="closed", ended_at=timezone.now())
+        self._cleanup()
+
+    def _cleanup(self):
+        self.stop_event.set()
         if self.ssh_chan is not None:
             try:
                 self.ssh_chan.close()
             except Exception:  # noqa: BLE001
                 pass
+        with self.cleanup_lock:
+            if self.slot_acquired:
+                self.slot_acquired = False
+                _terminal_slots.release()
         if self.ssh is not None and self.ssh.client is not None:
             try:
                 self.ssh.client.close()

@@ -45,6 +45,8 @@ let term = null
 let fitAddon = null
 let socket = null
 let attachAddon = null
+let heartbeatTimer = null
+let resizeTimer = null
 
 const statusText = computed(() => ({
   connecting: '连接中',
@@ -74,6 +76,7 @@ function write(text) {
 }
 
 function cleanupSocket() {
+  clearInterval(heartbeatTimer)
   if (attachAddon) {
     attachAddon.dispose()
     attachAddon = null
@@ -93,7 +96,7 @@ function connect() {
   write('\r\n\x1b[33m正在连接主机...\x1b[0m\r\n')
 
   socket = new WebSocket(buildWsUrl())
-  attachAddon = new AttachAddon(socket)
+  attachAddon = new AttachAddon(socket, { bidirectional: false })
   term.loadAddon(attachAddon)
 
   socket.onopen = () => {
@@ -101,7 +104,8 @@ function connect() {
     fitAddon.fit()
     term.focus()
     // 发一个换行，让远端 shell 立即输出一次提示符
-    socket.send('\n')
+    socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    heartbeatTimer = setInterval(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping' })) }, 30000)
   }
 
   socket.onerror = () => {
@@ -126,7 +130,11 @@ function goBack() {
 }
 
 function onResize() {
-  fitAddon?.fit()
+  clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    fitAddon?.fit()
+    if (socket?.readyState === WebSocket.OPEN && term) socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+  }, 150)
 }
 
 async function loadHost() {
@@ -154,6 +162,7 @@ onMounted(async () => {
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(terminalRef.value)
+  term.onData(data => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data })) })
   fitAddon.fit()
   window.addEventListener('resize', onResize)
 
@@ -164,6 +173,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   cleanupSocket()
+  clearTimeout(resizeTimer)
   term?.dispose()
   term = null
 })

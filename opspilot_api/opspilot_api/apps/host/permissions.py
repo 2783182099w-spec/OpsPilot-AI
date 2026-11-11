@@ -1,6 +1,7 @@
 from rest_framework.exceptions import PermissionDenied
 
 from .models import Host
+from users.access import is_observer
 
 
 def accessible_hosts(user):
@@ -13,8 +14,10 @@ def accessible_hosts(user):
 
 
 def require_hosts(user, ids):
-    if not isinstance(ids, list) or not ids or len(ids) > 50:
-        raise PermissionDenied("请选择 1 到 50 台已授权主机")
+    if is_observer(user):
+        raise PermissionDenied("只读观察员不能执行主机操作")
+    if not isinstance(ids, list) or not ids or len(ids) > 300:
+        raise PermissionDenied("请选择 1 到 300 台已授权主机")
     if any(type(value) is not int for value in ids):
         raise PermissionDenied("主机 ID 必须是整数")
     hosts = list(accessible_hosts(user).filter(id__in=ids))

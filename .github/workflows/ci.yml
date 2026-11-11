@@ -12,7 +12,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r opspilot_api/requirements-modern.txt
       - run: mkdir -p opspilot_api/logs
-      - run: python manage.py test host mtask ai
+      - run: python manage.py test host mtask ai users monitoring
         working-directory: opspilot_api
       - run: python manage.py makemigrations --check --dry-run
         working-directory: opspilot_api

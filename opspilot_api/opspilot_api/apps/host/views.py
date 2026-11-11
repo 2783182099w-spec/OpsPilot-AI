@@ -5,24 +5,34 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from openpyxl import load_workbook
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import ListCreateAPIView
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from users.access import OpsAccess
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
-from .models import Host, HostCategory
+from .models import Host, HostCategory, AssetChange
 from .permissions import accessible_hosts
 from .serializers import HostCategoryModelSerializer, HostModelSerializer
 from opspilot_api.utils.ssh import SSHParamiko
+
+
+def require_asset_admin(request):
+    if not request.user.is_superuser:
+        raise PermissionDenied('仅管理员可以维护资产或变更 SSH 连接配置')
 
 
 class HostCategoryListAPIView(ListCreateAPIView):
     """主机类别：列表 / 新建"""
 
     serializer_class = HostCategoryModelSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
+
+    def create(self, request, *args, **kwargs):
+        require_asset_admin(request)
+        return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
         return HostCategory.objects.filter(is_show=True, is_deleted=False).order_by("orders", "-id")
@@ -32,7 +42,7 @@ class HostModelViewSet(ModelViewSet):
     """主机信息：增删改查"""
 
     serializer_class = HostModelSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
 
     def get_queryset(self):
         queryset = accessible_hosts(self.request.user).select_related("category").order_by("-id")
@@ -42,7 +52,35 @@ class HostModelViewSet(ModelViewSet):
         search = self.request.query_params.get("search", "")[:100]
         if search:
             queryset = queryset.filter(Q(name__icontains=search) | Q(ip_addr__icontains=search) | Q(description__icontains=search))
+        for field in ('environment', 'business', 'owner_label', 'asset_status', 'connection_state'):
+            value = self.request.query_params.get(field)
+            if value:
+                queryset = queryset.filter(**{field: value[:100]})
         return queryset
+
+    def create(self, request, *args, **kwargs):
+        require_asset_admin(request)
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            self.get_object()
+            require_asset_admin(request)
+        return super().update(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        require_asset_admin(self.request)
+        super().perform_destroy(instance)
+
+    def perform_update(self, serializer):
+        from django.db import transaction
+        fields = ('name','ip_addr','port','username','category_id','tags','asset_status','environment','business','owner_label','os_name','purpose','description')
+        before = {field: getattr(serializer.instance, field) for field in fields}
+        with transaction.atomic():
+            instance = serializer.save()
+            changed = {field: {'before': before[field], 'after': getattr(instance, field)} for field in fields if before[field] != getattr(instance, field)}
+            if changed:
+                AssetChange.objects.create(host=instance, actor=self.request.user, changes=changed)
 
     def list(self, request, *args, **kwargs):
         if "page" not in request.query_params:
@@ -57,9 +95,10 @@ class HostModelViewSet(ModelViewSet):
 class HostKeyUploadView(APIView):
     """用登录密码连接一次目标主机，把系统全局 SSH 公钥写入 authorized_keys。"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
 
     def post(self, request, pk):
+        require_asset_admin(request)
         password = request.data.get("password")
         if not password:
             return Response({"error": "请输入主机登录密码"}, status=status.HTTP_400_BAD_REQUEST)
@@ -104,9 +143,10 @@ class HostExcelView(APIView):
     """
 
     parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
 
     def post(self, request):
+        require_asset_admin(request)
         host_excel = request.FILES.get("host_excel")
         if host_excel is None:
             return Response({"error": "请上传 Excel 文件"}, status=status.HTTP_400_BAD_REQUEST)

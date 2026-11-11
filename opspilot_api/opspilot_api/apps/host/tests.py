@@ -8,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied
 class HostPermissionTests(TestCase):
     def setUp(self):
         self.owner = get_user_model().objects.create_user("owner", password="test-only-password")
+        self.admin = get_user_model().objects.create_superuser("inventory-admin")
         self.other = get_user_model().objects.create_user("other", password="test-only-password")
         self.host = Host.objects.create(name="test", ip_addr="127.0.0.1", port=22, username="test")
         self.host.users.add(self.owner)
@@ -38,16 +39,24 @@ class HostPermissionTests(TestCase):
 
     def test_invalid_excel_has_readable_error(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
-        self.client.force_authenticate(self.owner)
+        self.client.force_authenticate(self.admin)
         response = self.client.post('/host/excel_host', {'host_excel': SimpleUploadedFile('bad.xlsx', b'bad')}, format='multipart')
         self.assertEqual(response.status_code, 400)
 
     def test_local_create_never_connects(self):
         from unittest.mock import patch
         from django.test import override_settings
-        self.client.force_authenticate(self.owner)
+        self.client.force_authenticate(self.admin)
         with override_settings(HOST_SSH_VALIDATE=False), patch('host.serializers.SSHParamiko') as ssh:
             response = self.client.post('/host/', {'name': 'offline', 'ip_addr': '127.0.0.2', 'port': 22, 'username': 'test'}, format='json')
             self.assertEqual(response.status_code, 201)
             ssh.assert_not_called()
-            self.assertTrue(Host.objects.get(pk=response.data['id']).users.filter(pk=self.owner.pk).exists())
+            self.assertTrue(Host.objects.get(pk=response.data['id']).users.filter(pk=self.admin.pk).exists())
+
+    def test_operator_cannot_create_or_retarget_assets(self):
+        self.client.force_authenticate(self.owner)
+        self.assertEqual(self.client.post('/host/', {'ip_addr': '192.0.2.100'}).status_code, 403)
+        for fields in ({'ip_addr': '192.0.2.100'}, {'environment': 'test'}):
+            self.assertEqual(self.client.patch(f'/host/{self.host.pk}', fields).status_code, 403)
+        self.assertEqual(self.client.post(f'/host/{self.host.pk}/upload_key', {}).status_code, 403)
+        self.assertEqual(self.client.delete(f'/host/{self.host.pk}').status_code, 403)

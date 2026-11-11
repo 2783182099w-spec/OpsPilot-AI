@@ -33,3 +33,6 @@ dist/
 known_hosts
 .venv/
 .local-services.json
+
+.runtime/
+.monitor-services.json

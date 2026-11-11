@@ -53,6 +53,7 @@ export default createStore({
   },
   getters: {
     token: (state) => state.token,
+    canOperate: (state) => ['admin', 'operator'].includes(state.profile?.role),
     remember: (state) => state.remember,
     userInfo: (state) => state.profile || decodePayload(state.token),
   },

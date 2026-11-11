@@ -17,15 +17,15 @@ const api = axios.create({
 })
 
 export function extractError(data) {
-  if (!data) return '请求失败'
-  if (typeof data === 'string') return data
+  if (!data) return '请求失败，请检查网络或稍后重试'
+  if (typeof data === 'string') return data.trim().startsWith('<') ? '服务器返回了异常响应' : data
   if (Array.isArray(data)) return data.join('；')
   if (data.detail) return data.detail
   if (data.error) return data.error
   const parts = []
   Object.keys(data).forEach((key) => {
     const value = data[key]
-    const text = Array.isArray(value) ? value.join('；') : String(value)
+    const text = Array.isArray(value) ? value.join('；') : value && typeof value === 'object' ? extractError(value) : String(value)
     parts.push(key === 'non_field_errors' ? text : `${key}: ${text}`)
   })
   return parts.join('；') || '请求失败'
@@ -42,6 +42,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (axios.isCancel(error)) return Promise.reject(error)
     const status = error?.response?.status
     const url = error?.config?.url || ''
     const isLoginRequest = url.includes('/users/login')

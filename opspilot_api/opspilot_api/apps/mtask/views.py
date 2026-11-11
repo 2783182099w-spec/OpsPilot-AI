@@ -1,7 +1,8 @@
 from django.conf import settings
 from rest_framework import status
 from rest_framework.generics import ListCreateAPIView
-from rest_framework.permissions import IsAuthenticated
+from users.access import OpsAccess
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,7 +18,7 @@ from .serializers import CmdTemplateCategorySerializer, CmdTemplateSerializer
 class CmdExecView(APIView):
     """批量执行命令：逐台主机执行，单台失败不影响其他主机。"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
 
     def post(self, request):
         if not request.user.is_superuser:
@@ -75,9 +76,14 @@ class CmdExecView(APIView):
 class TemplateView(ListCreateAPIView):
     """指令模板：列表 / 新建"""
 
-    queryset = CmdTemplate.objects.all().order_by("-id")
+    queryset = CmdTemplate.objects.filter(is_deleted=False).order_by("-id")
     serializer_class = CmdTemplateSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_superuser:
+            raise PermissionDenied('模板维护限管理员')
+        serializer.save()
 
 
 class TemplateCategoryView(ListCreateAPIView):
@@ -85,4 +91,4 @@ class TemplateCategoryView(ListCreateAPIView):
 
     queryset = CmdTemplateCategory.objects.all().order_by("-id")
     serializer_class = CmdTemplateCategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [OpsAccess]

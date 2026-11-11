@@ -16,11 +16,6 @@ def custom_exception_handler(exc, context):
         view = context.get("view")
         logger.exception("[%s] 未处理异常", view)
 
-        # 调试模式下交给 Django 输出完整堆栈，便于排查
-        from django.conf import settings
-        if settings.DEBUG:
-            return None
-
         if isinstance(exc, DatabaseError):
             return Response(
                 {"error": "服务器内部存储错误"},

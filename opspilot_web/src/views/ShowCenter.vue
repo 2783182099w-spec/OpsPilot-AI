@@ -1,178 +1,39 @@
-<template>
-  <div>
-    <a-row :gutter="16">
-      <a-col :span="8">
-        <a-card>
-          <a-statistic title="主机总数" :value="hosts.length" :loading="loading">
-            <template #prefix>
-              <cloud-server-outlined/>
-            </template>
-          </a-statistic>
-        </a-card>
-      </a-col>
-      <a-col :span="8">
-        <a-card>
-          <a-statistic title="主机类别" :value="categories.length" :loading="loading">
-            <template #prefix>
-              <appstore-outlined/>
-            </template>
-          </a-statistic>
-        </a-card>
-      </a-col>
-      <a-col :span="8">
-        <a-card>
-          <a-statistic title="指令模板" :value="templates.length" :loading="loading">
-            <template #prefix>
-              <code-outlined/>
-            </template>
-          </a-statistic>
-        </a-card>
-      </a-col>
-    </a-row>
-
-    <a-row :gutter="16" class="charts">
-      <a-col :span="12">
-        <a-card title="各类别主机数量" size="small">
-          <div ref="hostChartRef" class="chart"></div>
-        </a-card>
-      </a-col>
-      <a-col :span="12">
-        <a-card title="指令模板分布" size="small">
-          <div ref="templateChartRef" class="chart"></div>
-        </a-card>
-      </a-col>
-    </a-row>
-  </div>
-</template>
-
+<template><main ref="screen" class="wall" :class="{'wall-full':immersive}">
+<header class="wall-header"><div class="identity"><div class="brand-mark">OP</div><div><p>OPSPILOT · 基础设施运行态势</p><h1>运维态势总览</h1></div></div><div class="header-right"><div class="clock">{{clock}}</div><small>采集 60 秒 · 页面刷新 30 秒</small><div class="actions"><button @click="privacy=!privacy">{{privacy?'显示资产标识':'隐藏资产标识'}}</button><button :disabled="loading" @click="load">{{loading?'更新中…':'刷新数据'}}</button><button class="accent" @click="toggleFullscreen">{{immersive?'退出大屏':'全屏大屏'}}</button></div></div></header>
+<div class="system-strip"><span><i :class="data.health?.worker_active?'good':'bad'"></i>任务执行器 {{data.health?.worker_active?'在线':'离线'}}</span><span><i :class="data.health?.monitor_active?'good':'bad'"></i>监控同步 {{data.health?.monitor_active?'在线':'离线'}}</span><span :class="error?'text-warn':''">{{error||data.error||'数据来自当前账号授权范围，无模拟指标'}}</span><span class="last-update">最近更新 {{time(data.generated_at)}}{{loading?' · 正在更新':''}}</span></div>
+<div v-if="data.scope?.asset_total>data.scope?.limit" class="notice">资产统计覆盖全部授权主机，实时采集摘要最多显示前 {{data.scope.limit}} 台。</div><div v-if="data.health?.monitor_error||data.health?.config_error" class="notice">{{data.health.config_error||data.health.monitor_error}}</div>
+<section class="kpis"><article v-for="card in cards" :key="card.label" class="kpi" :class="card.tone"><span>{{card.label}}</span><strong>{{card.value}}<small>{{card.unit}}</small></strong><p>{{card.detail}}</p></article></section>
+<section class="primary-grid"><article class="panel collection-panel"><div class="panel-heading"><h2>采集覆盖与状态</h2><button @click="go('Monitoring')">查看监控 →</button></div><div ref="collectionEl" class="chart collection-chart"></div><div class="legend"><div v-for="item in collectionItems" :key="item.name"><i :style="{background:item.color}"></i><span>{{item.name}}</span><strong>{{item.value}}</strong></div></div></article>
+<article class="panel trend-panel"><div class="panel-heading"><h2>主机资源趋势 <small>最近 1 小时</small></h2><span class="badge">CPU / 内存</span></div><div ref="trendEl" class="chart"></div><p class="footnote">可用样本的算术平均，缺失不补 0。当前有效样本：CPU {{data.samples?.cpu||0}} 台 / 内存 {{data.samples?.memory||0}} 台。</p></article>
+<article class="panel"><div class="panel-heading"><h2>资产环境分布</h2><button @click="go('Host')">资产管理 →</button></div><div ref="environmentEl" class="chart"></div><p class="footnote">依据 CMDB 环境标签统计，不把未接入监控的资产计为在线。</p></article></section>
+<section class="secondary-grid"><article class="panel"><div class="panel-heading"><h2>关注中的告警</h2><button @click="go('Alerts')">告警中心 →</button></div><div class="empty-state" v-if="!data.recent_alerts?.length"><span class="empty-symbol">✓</span>当前权限范围内暂无未恢复告警<small>无告警不代表所有主机均已完成健康检查</small></div><div v-for="alert in data.recent_alerts||[]" :key="alert.id" class="alert-row" @click="go('Alerts',{host_id:alert.host_id})"><span class="severity-dot" :class="alert.severity"></span><div><strong>{{alert.title}}</strong><small>{{severityNames[alert.severity]||'告警'}} · {{assetName(alert.host_id,alert['host__name'])}} · {{time(alert.last_seen)}}</small></div><span class="pill" :class="alert.condition==='active'?'red':'amber'">{{alert.condition==='active'?'触发中':'待确认'}}</span></div></article>
+<article class="panel"><div class="panel-heading"><h2>资源占用 TOP 5</h2><div class="segmented"><button v-for="(label,key) in metricLabels" :key="key" :class="{selected:rankMetric===key}" @click="rankMetric=key">{{label}}</button></div></div><div class="empty-state" v-if="!data.top?.[rankMetric]?.length">暂无有效资源样本<small>需要先接入并成功采集对应指标</small></div><div v-for="(host,index) in data.top?.[rankMetric]||[]" :key="host.id" class="rank-row"><span class="rank-number">{{String(index+1).padStart(2,'0')}}</span><div class="rank-info"><a @click="router.push({name:'HostWorkbench',params:{id:host.id}})">{{assetName(host.id,host.name)}}</a><div class="track"><span :style="{width:Math.max(0,Math.min(100,host.value))+'%',background:host.value>=85?'#f6ad55':'#43d9c0'}"></span></div></div><strong>{{host.value.toFixed(1)}}<small>%</small></strong></div><p class="footnote">磁盘为最高文件系统使用率；数值来自最近有效采样。</p></article>
+<article class="panel"><div class="panel-heading"><h2>最近作业</h2><button @click="go('TaskCenter')">任务中心 →</button></div><div class="empty-state" v-if="!data.recent_tasks?.length">暂无任务记录</div><a v-for="task in data.recent_tasks||[]" :key="task.id" class="task-row" @click="go('TaskCenter',{task:String(task.id)})"><div><strong>#{{task.id}} <span>{{kinds[task.kind]||task.kind}}</span></strong><small>{{time(task.created_at)}}</small></div><span class="pill" :class="task.status==='completed'?'green':task.status==='failed'?'red':'blue'">{{states[task.status]||task.status}}</span></a><div class="queue-summary"><span>排队 <b>{{data.tasks?.pending||0}}</b></span><span>运行 <b>{{data.tasks?.running||0}}</b></span><span>待审批 <b>{{data.tasks?.awaiting_approval||0}}</b></span></div></article></section>
+<footer class="wall-footer"><span>OPSPILOT-AI · 轻量运维管理平台</span><span>成功率口径：近 24 小时提交且已结束任务中，完成任务占比；取消和待审批不计入。</span></footer>
+</main></template>
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import * as echarts from 'echarts'
-import { AppstoreOutlined, CloudServerOutlined, CodeOutlined } from '@ant-design/icons-vue'
-
+import {ref,computed,onMounted,onBeforeUnmount,nextTick} from 'vue'
+import {useRouter} from 'vue-router'
+import { init } from '@/utils/charts'
 import api from '@/api'
-
-const loading = ref(true)
-const hosts = ref([])
-const categories = ref([])
-const templates = ref([])
-
-const hostChartRef = ref(null)
-const templateChartRef = ref(null)
-let hostChart = null
-let templateChart = null
-
-const EMPTY_OPTION = {
-  title: {
-    text: '暂无数据',
-    left: 'center',
-    top: 'middle',
-    textStyle: { color: '#bfbfbf', fontSize: 14, fontWeight: 'normal' },
-  },
-}
-
-function countBy(items, pick) {
-  const result = {}
-  items.forEach((item) => {
-    const key = pick(item) || '未分类'
-    result[key] = (result[key] || 0) + 1
-  })
-  return result
-}
-
-function renderHostChart() {
-  if (!hostChart) return
-  const data = countBy(hosts.value, (host) => host.category_name)
-  const names = Object.keys(data)
-  if (!names.length) {
-    hostChart.setOption(EMPTY_OPTION, true)
-    return
-  }
-  hostChart.setOption({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 40 },
-    xAxis: { type: 'category', data: names },
-    yAxis: { type: 'value', minInterval: 1 },
-    series: [
-      {
-        name: '主机数量',
-        type: 'bar',
-        barMaxWidth: 40,
-        itemStyle: { color: '#2a5298', borderRadius: [4, 4, 0, 0] },
-        data: names.map((name) => data[name]),
-      },
-    ],
-  }, true)
-}
-
-function renderTemplateChart() {
-  if (!templateChart) return
-  const data = countBy(templates.value, (item) => item.category_name)
-  const names = Object.keys(data)
-  if (!names.length) {
-    templateChart.setOption(EMPTY_OPTION, true)
-    return
-  }
-  templateChart.setOption({
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0 },
-    series: [
-      {
-        name: '模板数量',
-        type: 'pie',
-        radius: ['40%', '65%'],
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-        label: { formatter: '{b}: {c}' },
-        data: names.map((name) => ({ name, value: data[name] })),
-      },
-    ],
-  }, true)
-}
-
-function resizeCharts() {
-  hostChart?.resize()
-  templateChart?.resize()
-}
-
-async function load() {
-  loading.value = true
-  try {
-    const [hostRes, categoryRes, templateRes] = await Promise.all([
-      api.get('/host/'),
-      api.get('/host/category'),
-      api.get('/mtask/templates'),
-    ])
-    hosts.value = hostRes.data
-    categories.value = categoryRes.data
-    templates.value = templateRes.data
-  } finally {
-    loading.value = false
-  }
-  await nextTick()
-  renderHostChart()
-  renderTemplateChart()
-}
-
-onMounted(() => {
-  hostChart = echarts.init(hostChartRef.value)
-  templateChart = echarts.init(templateChartRef.value)
-  window.addEventListener('resize', resizeCharts)
-  load()
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeCharts)
-  hostChart?.dispose()
-  templateChart?.dispose()
-})
+import {kinds,states,time} from '@/utils/ops'
+import {severityNames} from '@/utils/signals'
+const router=useRouter(),screen=ref(),data=ref({}),error=ref(''),loading=ref(false),immersive=ref(false),privacy=ref(true),clock=ref(''),rankMetric=ref('cpu'),collectionEl=ref(),trendEl=ref(),environmentEl=ref()
+const metricLabels={cpu:'CPU',memory:'内存',disk:'磁盘'},environments={test:'测试',staging:'保障 / 验收',production:'生产',other:'其他'}
+let charts=[],refreshTimer,clockTimer,observer,disposed=false
+const assetName=(id,name)=>privacy.value?'主机 '+String(id||0).padStart(3,'0'):(name||'已删除资产')
+const cards=computed(()=>[{label:'授权资产',value:data.value.scope?.asset_total??'—',unit:'台',detail:'CMDB 当前授权范围',tone:'cyan'},{label:'采集正常',value:data.value.collection?(data.value.collection.up||0):'—',unit:'台',detail:`已接入并启用 ${data.value.scope?.monitored??0} 台`,tone:'green'},{label:'失联 / 异常采集',value:data.value.collection?['down','partial','unknown','stale'].reduce((sum,k)=>sum+(data.value.collection?.[k]||0),0):'—',unit:'台',detail:'包含端点失联、部分失败与过期',tone:'amber'},{label:'触发中的告警',value:data.value.alerts?.active??'—',unit:'条',detail:`严重 ${data.value.alerts?.critical_active??0} 条 · 待确认 ${data.value.alerts?.unknown??0} 条`,tone:'red'},{label:'24 小时任务成功率',value:data.value.tasks?.success_rate==null?'—':data.value.tasks.success_rate,unit:'%',detail:`已结束 ${data.value.tasks?.ended_24h??0} 个 · 成功 ${data.value.tasks?.success_24h??0} 个`,tone:'cyan'},{label:'24 小时提交任务',value:data.value.tasks?.total_24h??'—',unit:'个',detail:`当前运行 ${data.value.tasks?.running??0} 个 · 排队 ${data.value.tasks?.pending??0} 个`,tone:'blue'}])
+const collectionItems=computed(()=>[{name:'采集正常',value:data.value.collection?.up||0,color:'#43d9c0'},{name:'端点失联',value:data.value.collection?.down||0,color:'#ff6b7a'},{name:'未知 / 部分失败',value:['unknown','stale','partial'].reduce((s,k)=>s+(data.value.collection?.[k]||0),0),color:'#f6ad55'},{name:'未接入 / 停用',value:(data.value.collection?.not_configured||0)+(data.value.collection?.disabled||0),color:'#52627e'}])
+function go(name,query={}){router.push({name,query})}
+function render(){if(disposed||charts.length!==3)return;const color='#94a8c5',axis={axisLine:{lineStyle:{color:'#2a3b57'}},axisLabel:{color},splitLine:{lineStyle:{color:'#1d2c44'}}};const items=collectionItems.value;charts[0].setOption({animation:false,tooltip:{trigger:'item'},series:[{type:'pie',radius:['62%','82%'],center:['50%','48%'],label:{show:false},data:items.map(i=>({name:i.name,value:i.value,itemStyle:{color:i.color}}))}],graphic:[{type:'text',left:'center',top:'37%',style:{text:String(data.value.scope?.displayed??0),fill:'#e7f4ff',font:'bold 36px sans-serif'}},{type:'text',left:'center',top:'58%',style:{text:'当前摘要主机',fill:color,font:'12px sans-serif'}}]},true);const trend=data.value.trend||{};const hasTrend=(trend.cpu||[]).length||(trend.memory||[]).length;charts[1].setOption({animation:false,color:['#43d9c0','#6da8ff'],title:{text:hasTrend?'':'暂无历史样本',left:'center',top:'center',textStyle:{color,fontSize:14,fontWeight:'normal'}},tooltip:{trigger:'axis',valueFormatter:v=>v==null?'缺失':Number(v).toFixed(1)+'%'},legend:{top:8,textStyle:{color},icon:'roundRect'},grid:{left:42,right:18,top:50,bottom:32},xAxis:{...axis,type:'time'},yAxis:{...axis,type:'value',min:0,max:100,axisLabel:{color,formatter:'{value}%'}},series:[{name:'CPU',type:'line',showSymbol:false,connectNulls:false,data:(trend.cpu||[]).map(([t,v])=>[t*1000,v])},{name:'内存',type:'line',showSymbol:false,connectNulls:false,data:(trend.memory||[]).map(([t,v])=>[t*1000,v])}]},true);const groups=data.value.asset_groups||[];charts[2].setOption({animation:false,tooltip:{trigger:'axis'},grid:{left:85,right:35,top:25,bottom:35},xAxis:{...axis,type:'value',minInterval:1},yAxis:{...axis,type:'category',data:groups.map(g=>environments[g.environment]||g.environment)},series:[{type:'bar',barMaxWidth:20,data:groups.map(g=>g.count),label:{show:true,position:'right',color:'#c6d6ec'},itemStyle:{color:'#6da8ff',borderRadius:[0,5,5,0]}}]},true)}
+async function load(){if(loading.value)return;loading.value=true;try{const response=await api.get('/monitoring/dashboard');if(disposed)return;data.value=response.data;error.value='';await nextTick();render()}catch{if(!disposed)error.value='本次刷新失败，保留上次数据；请检查登录状态或后端服务'}finally{loading.value=false}}
+function resize(){charts.forEach(c=>c.resize())}
+async function toggleFullscreen(){if(immersive.value){if(document.fullscreenElement)await document.exitFullscreen();immersive.value=false}else{immersive.value=true;try{await screen.value.requestFullscreen()}catch{/* Browser restrictions: retain immersive window layout. */}}await nextTick();resize()}
+function fullscreenChanged(){if(!document.fullscreenElement)immersive.value=false;nextTick(resize)}
+onMounted(()=>{charts=[init(collectionEl.value),init(trendEl.value),init(environmentEl.value)];observer=new ResizeObserver(resize);observer.observe(screen.value);document.addEventListener('fullscreenchange',fullscreenChanged);clock.value=new Date().toLocaleString('zh-CN',{hour12:false});clockTimer=setInterval(()=>{clock.value=new Date().toLocaleString('zh-CN',{hour12:false})},1000);load();refreshTimer=setInterval(()=>{if(!document.hidden)load()},30000)})
+onBeforeUnmount(()=>{disposed=true;clearInterval(refreshTimer);clearInterval(clockTimer);observer?.disconnect();document.removeEventListener('fullscreenchange',fullscreenChanged);charts.forEach(c=>c.dispose());charts=[]})
 </script>
-
 <style scoped>
-.charts {
-  margin-top: 16px;
-}
-
-.chart {
-  height: 320px;
-}
+.wall{--muted:#8fa6c5;color:#dce9fa;background:radial-gradient(ellipse at 45% 0,#152945 0,#0a1425 65%);padding:26px;border-radius:14px;min-height:900px;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}.wall-full{position:fixed;inset:0;z-index:2000;border-radius:0;overflow:auto;min-height:100vh;width:100%;background:#0a1425}.wall-header{display:flex;justify-content:space-between;align-items:center;gap:20px}.identity{display:flex;gap:16px;align-items:center}.brand-mark{width:52px;height:52px;border:1px solid #46cbb0;border-radius:14px;display:grid;place-items:center;font-weight:800;color:#5ce1c2;font-size:20px;background:#43d9c00c}.identity p{color:#7898bd;letter-spacing:2px;font-size:11px;margin:0 0 5px}.identity h1{font-size:27px;letter-spacing:2px;margin:0;color:#f0f7ff}.header-right{text-align:right}.clock{font:18px ui-monospace,monospace;color:#c7daf2}.header-right small{color:var(--muted);font-size:11px}.actions{display:flex;gap:7px;margin-top:9px;justify-content:flex-end}.wall button{border:1px solid #2b405f;background:#15243a;color:#b5cce7;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:12px}.wall button:hover{color:#fff;border-color:#4e8bad}.wall button.accent{color:#62e3c7;border-color:#2c8879;background:#1d564526}.wall button:disabled{opacity:.5;cursor:wait}.system-strip{display:flex;gap:22px;align-items:center;flex-wrap:wrap;border-top:1px solid #26364e;border-bottom:1px solid #26364e;padding:13px 0;margin:20px 0;font-size:11px;color:var(--muted)}.system-strip i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:7px}.good{background:#43d9c0}.bad{background:#ff6b7a}.text-warn{color:#f6ad55}.last-update{margin-left:auto}.notice{background:#5f421e38;color:#f6c27e;padding:10px 14px;margin-bottom:12px;font-size:12px}.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;margin-bottom:18px}.kpi{border:1px solid #263954;background:linear-gradient(145deg,#172840aa,#0f1d33aa);border-radius:9px;padding:18px 16px;border-top:2px solid #6da8ff}.kpi>span{font-size:12px;color:#a1b8d5}.kpi strong{display:block;color:#e4f3ff;font:700 32px ui-monospace,monospace;margin:10px 0}.kpi strong small{font-size:12px;color:#8fa6c5;font-weight:400;margin-left:6px}.kpi p{font-size:10px;color:#7792b3;margin:0;line-height:1.5}.kpi.green{border-top-color:#43d9c0}.kpi.amber{border-top-color:#f6ad55}.kpi.red{border-top-color:#ff6b7a}.kpi.cyan{border-top-color:#5dcfe5}.primary-grid{display:grid;grid-template-columns:1fr 1.65fr 1fr;gap:16px;margin-bottom:16px}.secondary-grid{display:grid;grid-template-columns:1.25fr 1.15fr 1fr;gap:16px}.panel{border:1px solid #253650;background:#101e33c9;border-radius:9px;padding:17px 18px;min-width:0}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}.panel-heading h2{font-size:14px;font-weight:600;margin:0;color:#d9e9fb;white-space:nowrap}.panel-heading h2 small{font-size:10px;font-weight:400;color:#7a94b8;margin-left:6px}.panel-heading>button{border:0;background:none;color:#77acd1;padding:0;white-space:nowrap}.badge{color:#7a94b8;font-size:10px;border:1px solid #2d4664;padding:2px 6px;border-radius:4px}.chart{height:230px}.collection-chart{height:170px}.legend{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px;margin:7px 0;font-size:10px;color:#8fa6c5}.legend div{display:flex;align-items:center;gap:5px}.legend i{width:6px;height:6px;border-radius:50%}.legend strong{margin-left:auto;color:#d3e4fb}.footnote{font-size:10px;color:#7991b3;margin:9px 0 0;line-height:1.7}.empty-state{min-height:185px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:9px;color:#95aecf;font-size:12px}.empty-state small{font-size:10px;color:#6f88aa}.empty-symbol{font-size:28px;color:#43d9c0}.alert-row{display:flex;align-items:center;gap:10px;padding:13px 0;border-bottom:1px solid #1e304a;cursor:pointer}.alert-row>div{flex:1;min-width:0}.alert-row strong{display:block;font-size:12px;font-weight:500;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.alert-row small,.task-row small{display:block;font-size:10px;color:#7d97ba;margin-top:5px}.severity-dot{width:7px;height:7px;border-radius:50%;background:#6da8ff;flex-shrink:0}.severity-dot.critical{background:#ff6b7a}.severity-dot.warning{background:#f6ad55}.pill{font-size:10px;border-radius:4px;padding:3px 7px;white-space:nowrap}.pill.red{color:#ff9ba7;background:#ac3d5226}.pill.green{color:#60dfbf;background:#1f997326}.pill.amber{color:#f7c489;background:#b7882826}.pill.blue{color:#9ac1ff;background:#3676c526}.segmented{display:flex;gap:3px}.segmented button{padding:4px 6px;border:0;font-size:10px;background:none}.segmented .selected{background:#2c4c6c80;color:#7ce1cf}.rank-row{display:flex;gap:12px;align-items:center;margin:21px 0}.rank-number{font:12px ui-monospace,monospace;color:#486184}.rank-info{flex:1;min-width:0}.rank-info a{display:block;color:#b8cde7;font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.track{height:5px;background:#20314c;border-radius:4px;overflow:hidden;margin-top:9px}.track span{display:block;height:100%;border-radius:4px}.rank-row>strong{font:14px ui-monospace,monospace;color:#d8ebfa}.rank-row>strong small{color:#7894b8;font-size:10px;margin-left:3px}.task-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 0;border-bottom:1px solid #1e304a;cursor:pointer}.task-row strong{font-size:11px;font-weight:500;color:#a7c9ef}.task-row strong span{color:#b6c7dc;margin-left:6px}.queue-summary{display:flex;justify-content:space-around;color:#8099bb;margin-top:18px;font-size:11px}.queue-summary b{color:#cae0f5;margin-left:6px}.wall-footer{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;color:#526f94;font-size:10px;margin-top:20px}@media(min-width:1800px){.chart{height:260px}.collection-chart{height:190px}.wall{padding:32px}.kpi strong{font-size:40px}.panel{padding:20px 24px}}@media(max-width:1350px){.kpis{grid-template-columns:repeat(3,1fr)}.primary-grid{grid-template-columns:1fr 1.5fr}.primary-grid>.panel:last-child{grid-column:1/-1}.primary-grid>.panel:last-child .chart{height:150px}.secondary-grid{grid-template-columns:1fr 1fr}.secondary-grid>.panel:last-child{grid-column:1/-1}.clock{font-size:14px}.wall{padding:20px}}@media(max-width:900px){.primary-grid,.secondary-grid{grid-template-columns:1fr}.primary-grid>.panel:last-child,.secondary-grid>.panel:last-child{grid-column:auto}.wall-header{align-items:flex-start;flex-direction:column}.header-right{text-align:left;width:100%}.actions{justify-content:flex-start}.kpis{grid-template-columns:repeat(2,1fr)}.last-update{margin-left:0}}
+.wall-full .secondary-grid{height:26vh;min-height:230px;max-height:300px}.wall-full .secondary-grid>.panel{overflow:auto}.wall-full .wall-footer{margin-top:14px}.wall-full .chart{height:clamp(160px,21vh,245px)}.wall-full .collection-chart{height:clamp(140px,16vh,185px)}.wall-full .task-row,.wall-full .alert-row{padding:10px 0}.wall-full .kpi{padding:15px 16px}@media(max-height:850px) and (min-width:1351px){.wall-full{padding:18px}.wall-full .wall-header h1{font-size:23px}.wall-full .system-strip{margin:12px 0;padding:10px 0}.wall-full .kpi strong{font-size:27px;margin:7px 0}.wall-full .kpis{margin-bottom:12px}.wall-full .chart{height:165px}.wall-full .collection-chart{height:130px}.wall-full .panel{padding:12px 15px}.wall-full .rank-row{margin:15px 0}.wall-full .task-row,.wall-full .alert-row{padding:8px 0}.wall-full .wall-footer{margin-top:12px}}
 </style>
